@@ -42,7 +42,7 @@ model_cfg:
 ## 5.2 Experiment protocol (fairness is the whole point)
 
 1. **Fix one primary seed** across all four. Additional seeds are optional sensitivity runs for the baseline and full model, not a substitute for folds.
-2. **Required matrix:** all four configs on all five official PI-CAI folds, for 20 required training runs. At the shipped schedule (50 epochs × 2500 batches + 10 SWA ≈ 150k steps) that is ~11–21 h per run, ~10–20 GPU-days total. The fold-0 pilots decide which of the three pre-committed budget options in `THESIS_PLAN.md §12` applies — **choose before launching, not after seeing results.**
+2. **Required matrix:** all four configs on all five official PI-CAI folds, for 20 required training runs. At the shipped schedule (50 epochs × 2500 batches + 10 SWA ≈ 150k steps) that is ~11–21 h per run, ~10–20 GPU-days total. The fold-0 pilots decide which of the three pre-committed budget options in `SPEC.md §12` applies — **choose before launching, not after seeing results.**
 3. **Same schedule:** identical epochs / LR / batch / augmentation. Only the two module flags differ. No `EarlyStopping` (nnDetection has none) — a per-config stopping point would invalidate the comparison. If the schedule is shortened for budget, shorten it identically across all 20 runs.
 4. **One directory per run:**
    ```
@@ -79,7 +79,7 @@ Before trusting any ablation, re-run `baseline.yaml` and confirm it matches `bas
 
 | Risk | Fallback |
 |---|---|
-| Compute cannot afford 20 required runs | Apply the pre-committed ladder in `THESIS_PLAN.md §12`: full matrix → halve `num_train_batches_per_epoch` for *all* runs → 14-run reduced matrix (4 configs on fold 0 + baseline/full on all 5 folds). Never drop folds for some configs only — that breaks the paired Wilcoxon test. Record which option was used. |
+| Compute cannot afford 20 required runs | Apply the pre-committed ladder in `SPEC.md §12`: full matrix → halve `num_train_batches_per_epoch` for *all* runs → 14-run reduced matrix (4 configs on fold 0 + baseline/full on all 5 folds). Never drop folds for some configs only — that breaks the paired Wilcoxon test. Record which option was used. |
 | Full GCALF OOM when baseline fits | Reduce CAF windows, checkpoint CAF activations, then restrict true CAF to stage 5. BiFusion is only a separately named fallback. |
 | Registry drift breaks baseline invariance | Revert to `baseline-v1` module construction path; add a regression test comparing outputs. |
 | One config diverges | Isolate: it's config-only, so re-check that config's flags; the other three are unaffected. |

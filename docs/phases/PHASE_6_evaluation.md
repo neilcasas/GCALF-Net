@@ -22,7 +22,7 @@
 ## 6.2 Five-class GGG classification (the thesis headline)
 
 Per-lesion (detection model) or per-case (classifier fallback). `gcalf_eval/run_eval.py`:
-- **Confusion matrix — 5×5** over ground-truth lesions matched to detections, GGG1–5 (masterfile Table 3.2). The detection model has **no background class** (`classifier_classes=5`, see `THESIS_PLAN.md §0`), so there is no background row or column to draw. Report the detection-side error modes as two numbers beside the matrix — **missed lesions** (unmatched ground truth, per GGG) and **false positives** (unmatched detections, split by benign vs positive case) — and state the matching criterion and score threshold used. A "6×6 with background" matrix would describe a model that does not exist; if the classifier-fallback model is the one being evaluated, it *is* 6-way over `case_ISUP` and should be labelled as such.
+- **Confusion matrix — 5×5** over ground-truth lesions matched to detections, GGG1–5 (masterfile Table 3.2). The detection model has **no background class** (`classifier_classes=5`, see `SPEC.md §0`), so there is no background row or column to draw. Report the detection-side error modes as two numbers beside the matrix — **missed lesions** (unmatched ground truth, per GGG) and **false positives** (unmatched detections, split by benign vs positive case) — and state the matching criterion and score threshold used. A "6×6 with background" matrix would describe a model that does not exist; if the classifier-fallback model is the one being evaluated, it *is* 6-way over `case_ISUP` and should be labelled as such.
 - **Macro-F1**, **balanced accuracy**, **per-class sensitivity/recall** and **precision**.
 - **GGG2 vs GGG3** sensitivity — call this out explicitly; it's the clinical threshold the whole thesis targets.
 - **Quadratic-weighted Cohen's κ** — the grades are ordinal, so κ_w is the right agreement metric (penalizes far-off errors more).
@@ -58,7 +58,7 @@ Masterfile §F cites Wilcoxon (1945) + Shapiro-Wilk (1965):
 
 ## 6.7 Compute note (cloud)
 
-Full evaluation reuses the trained checkpoints from Phase 5; it's cheap (inference + metrics). If training ran on cloud (see `THESIS_PLAN.md §11–12`), pull checkpoints locally and run eval on CPU/small GPU. Keep the same `gcalf_configs/*.yaml` so local and cloud evaluation are identical.
+Full evaluation reuses the trained checkpoints from Phase 5; it's cheap (inference + metrics). If training ran on cloud (see `SPEC.md §11–12`), pull checkpoints locally and run eval on CPU/small GPU. Keep the same `gcalf_configs/*.yaml` so local and cloud evaluation are identical.
 
 ## 6.8 Risks & fallbacks
 

@@ -379,7 +379,7 @@ folds   = [0, 1, 2, 3, 4]
 seed    = 2026
 ```
 
-**Budget, stated before launch.** The shipped schedule (`nndet/conf/train/v001.yaml`: 50 epochs × 2500 batches + 10 SWA epochs) is ≈150k optimizer steps per run — roughly 11–21 h on a single 16–24 GB GPU depending on measured seconds/step, so ~10–20 GPU-days for the full matrix. The two fold-0 pilots exist to replace that range with a measurement. As soon as they finish, pick one of the three pre-committed options in `THESIS_PLAN.md §12` (full matrix / halved batches-per-epoch across all runs / 14-run reduced matrix) and record the choice in every subsequent `run.json`. Choosing after seeing fold results is a form of test-set tuning.
+**Budget, stated before launch.** The shipped schedule (`nndet/conf/train/v001.yaml`: 50 epochs × 2500 batches + 10 SWA epochs) is ≈150k optimizer steps per run — roughly 11–21 h on a single 16–24 GB GPU depending on measured seconds/step, so ~10–20 GPU-days for the full matrix. The two fold-0 pilots exist to replace that range with a measurement. As soon as they finish, pick one of the three pre-committed options in `SPEC.md §12` (full matrix / halved batches-per-epoch across all runs / 14-run reduced matrix) and record the choice in every subsequent `run.json`. Choosing after seeing fold results is a form of test-set tuning.
 
 Scheduling rules:
 
@@ -465,7 +465,7 @@ Cost controls:
 | Tiny train | Two epochs, checkpoint upload, forced stop, resume, predict, evaluate |
 | Recovery | Replacement VM resumes same run with at most one epoch lost |
 | Baseline | Fold-0 output is consistent with local baseline within declared tolerance |
-| Budget | Fold-0 pilots report measured seconds/step, wall time, and cost; one of the three `THESIS_PLAN.md §12` matrix options is selected and recorded |
+| Budget | Fold-0 pilots report measured seconds/step, wall time, and cost; one of the three `SPEC.md §12` matrix options is selected and recorded |
 | Matrix | Every required config/fold run under the selected option (20, or 14 if reduced) has a complete manifest |
 | Collection | All metric rows share dataset/split/protocol identifiers |
 

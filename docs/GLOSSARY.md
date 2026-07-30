@@ -14,6 +14,6 @@
 | Prepared dataset | The immutable nnDetection raw/preprocessed task, splits, preprocessing config, and manifest used by training. |
 | Dataset manifest | SHA-256 inventory that binds data files, modality order, preprocessing config, and split file to one dataset version. |
 | Run ID | Unique identity for one config, fold, seed, timestamp, and Git revision. |
-| Primary matrix | The required 4 configurations x 5 official folds x 1 primary seed, totaling 20 runs. Reducible only via the pre-committed ladder in `THESIS_PLAN.md §12`. |
+| Primary matrix | The required 4 configurations x 5 official folds x 1 primary seed, totaling 20 runs. Reducible only via the pre-committed ladder in `SPEC.md §12`. |
 | Durable checkpoint | A locally valid checkpoint and run state successfully synchronized to object storage. |
 | S3-compatible | An object store usable through the AWS CLI S3 command contract, optionally with a custom endpoint URL. |

@@ -1,4 +1,4 @@
-# GCALF-Net — Technical Implementation Plan
+# GCALF-Net — Technical Specification
 
 **Thesis:** GCALF-Net: Modified PDHD-Net with Adaptive Frequency Filtering and Cross-Attention Fusion for Gleason Grade Group Classification using bpMRI
 **Dataset:** PI-CAI (bpMRI: T2W, ADC, DWI) — 5-class Gleason Grade Group (GGG 1–5)
@@ -12,7 +12,7 @@
 >
 > **Rev. 4 corrections (verified against the code, not the papers):** the working repository is `GCALF-Net/` (a copy of `PDHD-Net/` at tag `pdhd-upstream`; the original stays untouched as the released reference); `classifier_classes` is **5**, not 6 — nnDetection instance classes are foreground-only and 0-indexed, so `lesion_ISUP k → class k-1` and benign cases carry **zero instances**; the LFF spectral grid must be defined on shifted (centered) frequency coordinates and use a real-valued gain; CAF must apply its CNN residual **once** and mask padded window tokens; and the real training schedule is 50 epochs × 2500 batches (+10 SWA), which fixes the compute budget for the 20-run matrix. See §0 and the amendments in the ADR.
 >
-> **Documentation map:** `docs/README.md` indexes the plans, `docs/GLOSSARY.md` defines canonical terms, and `docs/CLOUD_DEPLOYMENT_PLAN.md` is the cloud runbook.
+> **Documentation map:** `docs/README.md` indexes the plans, `docs/ROADMAP.md` is the milestone ledger (what must be true, and how it is tested, before each milestone closes), `docs/GLOSSARY.md` defines canonical terms, and `docs/CLOUD_DEPLOYMENT_PLAN.md` is the cloud runbook.
 
 ---
 

@@ -57,7 +57,7 @@ Exit when the pipeline runs start→finish and writes `metrics.csv`. Numbers wil
 ## 2.4 M4 — full baseline train/eval ⭐
 
 - Train the shipped schedule per fold, unchanged: `nndet/conf/train/v001.yaml` → `max_num_epochs: 50`, `num_train_batches_per_epoch: 2500`, `swa_epochs: 10`, SGD `initial_lr: 0.01` with poly decay, `precision: 16`. That is ≈150k steps ≈ 11–21 h per fold. There is **no `EarlyStopping`** in nnDetection and you must not add one — a stopping rule that fires at different points per config would invalidate the four-way comparison. Checkpoint selection is already handled by `monitor_key: mAP_IoU_0.14_0.90_0.05_MaxDet_100`.
-- **Record measured seconds/step and total wall time for fold 0.** This is the pilot number that decides which matrix option §12 of `THESIS_PLAN.md` selects; the whole 20-run budget hangs off it. If the schedule must be shortened, shorten it identically for all 20 runs.
+- **Record measured seconds/step and total wall time for fold 0.** This is the pilot number that decides which matrix option §12 of `SPEC.md` selects; the whole 20-run budget hangs off it. If the schedule must be shortened, shorten it identically for all 20 runs.
 - Class weighting in the focal classification loss reflecting `{847,228,234,99,40,52}` (`nndet/losses/{classification,modern_classification}.py`).
 - Enable AMP (`autocast`) — no FFT in the baseline so no autocast exclusions yet.
 - Predict + evaluate (details in `PHASE_6_evaluation.md`): FROC/AUROC via picai_eval, plus 5-class confusion matrix / macro-F1 / per-class sensitivity (esp. GGG2 vs GGG3 — the headline).
@@ -73,7 +73,7 @@ Exit when the pipeline runs start→finish and writes `metrics.csv`. Numbers wil
 
 | Risk | Fallback |
 |---|---|
-| Full multi-task detection won't converge / too slow | **Classifier-fallback model** (`THESIS_PLAN.md §14`): `Encoder` + global-pool + linear GGG head, `case_ISUP` labels, focal loss. Still the baseline for the 4-way ablation; drops FROC/Dice. Build it under `nndet/arch/encoder/gcalf/classifier_model.py`. Note this model *does* have a benign class (6-way over `case_ISUP ∈ {0..5}`) because it is a plain classifier — that is a property of the fallback, not of the detection model. |
+| Full multi-task detection won't converge / too slow | **Classifier-fallback model** (`SPEC.md §14`): `Encoder` + global-pool + linear GGG head, `case_ISUP` labels, focal loss. Still the baseline for the 4-way ablation; drops FROC/Dice. Build it under `nndet/arch/encoder/gcalf/classifier_model.py`. Note this model *does* have a benign class (6-way over `case_ISUP ∈ {0..5}`) because it is a plain classifier — that is a property of the fallback, not of the detection model. |
 | OOM at plan's patch size | Reduce `patch_size` in the plan; batch 1 + grad-accum; AMP. |
 | Classifier head shape/anchor confusion | Verify `classifier_classes=5`; inspect one prediction's per-anchor logits before scaling up. |
 | Baseline numbers implausibly low | Re-run overfit test; check label mapping (Phase 1 sanity); check channel order. |

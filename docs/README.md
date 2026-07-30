@@ -6,7 +6,8 @@ Start here:
 
 | Document | Purpose |
 |---|---|
-| [`THESIS_PLAN.md`](THESIS_PLAN.md) | Master scientific and technical implementation plan. |
+| [`SPEC.md`](SPEC.md) | Master scientific and technical specification — the what and why. |
+| [`ROADMAP.md`](ROADMAP.md) | The spec split into 11 milestones, each with one goal and one pass/fail test. |
 | [`adr/0001-gcalf-architecture-and-cloud.md`](adr/0001-gcalf-architecture-and-cloud.md) | Accepted architecture, experiment, and cloud decisions from the grilling session. |
 | [`CLOUD_DEPLOYMENT_PLAN.md`](CLOUD_DEPLOYMENT_PLAN.md) | Provider-neutral GPU VM, S3-compatible storage, Docker, recovery, security, and 20-run execution plan. |
 | [`GLOSSARY.md`](GLOSSARY.md) | Canonical meanings of LFF, CAF, baseline, dataset version, and run artifacts. |
@@ -24,4 +25,4 @@ Execution order:
 
 The ADR is authoritative when older thesis prose or upstream repository comments use conflicting terminology. In particular, CAF means true bidirectional windowed Q/K/V cross-attention; TransFuse BiFusion is not CAF.
 
-Where the shipped code and the papers/READMEs disagree, **the code wins** — see `THESIS_PLAN.md §0` and the ADR's rev. 2 amendments. The three that bite hardest: `classifier_classes` is 5 (foreground-only, 0-indexed, no background class), the training schedule is 50 epochs × 2500 batches (not 1000 epochs, and there is no `EarlyStopping`), and `nndet/conf/train/smoke.yaml` already exists for tiny runs.
+Where the shipped code and the papers/READMEs disagree, **the code wins** — see `SPEC.md §0` and the ADR's rev. 2 amendments. The three that bite hardest: `classifier_classes` is 5 (foreground-only, 0-indexed, no background class), the training schedule is 50 epochs × 2500 batches (not 1000 epochs, and there is no `EarlyStopping`), and `nndet/conf/train/smoke.yaml` already exists for tiny runs.

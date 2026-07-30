@@ -64,7 +64,7 @@ Everything else (picai tools, medcam) bends to this. GFNet/TransFuse/UCTransNet/
    python GCALF-Net/tests/test_imports.py
    ```
 7. **CPU forward-pass smoke** (`tests/test_encoder_cpu.py`): build `Encoder` with a tiny config, feed `torch.randn(1,3,16,64,64)`, assert it returns a list of feature maps without error. This proves the Swin+CNN+wavelet+fusion graph is wired before you touch data.
-8. **Scaffold the gcalf code tree** (empty modules + `__init__.py`) as laid out in `THESIS_PLAN.md §2`. Commit.
+8. **Scaffold the gcalf code tree** (empty modules + `__init__.py`) as laid out in `SPEC.md §2`. Commit.
 
 ## 0.3 nnDetection csrc build failure — the top risk
 

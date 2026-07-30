@@ -34,7 +34,7 @@ The last conv feeding the GGG classifier — the deepest BiFPN map used by `_bui
 
 **nnDetection caveat (important):** RetinaUNet's classification head is **per-anchor**, so:
 - `layer='auto'` may latch onto a detection/regression layer, and the "score" is per-anchor, not a clean per-volume class logit.
-- **Recommended path:** run Grad-CAM on the **classifier-fallback model** (`nndet/arch/encoder/gcalf/classifier_model.py`, `THESIS_PLAN.md §14`) whose output is a clean `(B, num_classes)` vector — exactly what medcam expects. This is the cleanest input for the urologist study and sidesteps anchor bookkeeping.
+- **Recommended path:** run Grad-CAM on the **classifier-fallback model** (`nndet/arch/encoder/gcalf/classifier_model.py`, `SPEC.md §14`) whose output is a clean `(B, num_classes)` vector — exactly what medcam expects. This is the cleanest input for the urologist study and sidesteps anchor bookkeeping.
 - If you must explain the detection model: specify the classifier conv `layer=` explicitly and a `label=` lambda selecting the target lesion's anchor logits.
 
 ## 7.3 Backend choice
@@ -72,4 +72,4 @@ The last conv feeding the GGG classifier — the deepest BiFPN map used by `_bui
 - Files: `gcalf_eval/gradcam.py`, `tests/test_gradcam.py`, review packets under `gcalf_experiments/_gradcam/`.
 - Hand the blinded packets + rating sheets to the 3 urologists → collect Likert scores → report mean/SD (threshold ≥4.0 per masterfile) for SOP 4.
 
-**Done.** This closes the milestone chain M0→M10. See `THESIS_PLAN.md §15` for the full timeline and SOP mapping.
+**Done.** This closes the milestone chain M0→M10. See `SPEC.md §15` for the full timeline and SOP mapping.
