@@ -7,7 +7,7 @@
 | M | Milestone | Phase | Goal (one sentence) |
 |---|---|---|---|
 | M0 | Environment | [0](phases/PHASE_0_environment.md) | One reproducible env where `nndet`, PI-CAI tools and medcam all import |
-| M1 | Data pipeline | [1](phases/PHASE_1_data_pipeline.md) | A validated nnDetection task with 3-channel bpMRI and per-lesion GGG labels |
+| M1 | Data pipeline | [1](phases/PHASE_1_data_pipeline.md) | A validated nnDetection task with 3-channel bpMRI and per-lesion GGG2--5 labels |
 | M2 | Baseline forward | [2](phases/PHASE_2_baseline.md) | The adapted 3-channel model builds, runs, and can memorize 2 cases |
 | M3 | Baseline tiny train | [2](phases/PHASE_2_baseline.md) | Train→predict→eval works end-to-end on a 6-case task |
 | M4 ⭐ | Baseline full train | [2](phases/PHASE_2_baseline.md) | Real baseline numbers on PI-CAI — the thesis's first result |
@@ -35,16 +35,20 @@ python -c "import picai_prep, picai_eval, medcam"
 
 ## M1 — Data pipeline
 
-**Goal.** `nnDet_raw/Task2xx_PICAI/` populated from PI-CAI with 3 co-registered modalities per case, per-lesion GGG stored as 0-indexed foreground classes (`lesion_ISUP k → class k-1`), benign cases carrying `"instances": {}`, and the official 5-fold splits loaded.
+**Goal.** `Task2201_PICAI_GGG/` populated from PI-CAI's 1,295-case granular-annotation cohort with
+three co-registered modalities per case, per-lesion GGG2--5 stored as 0-indexed foreground classes
+(`ISUP 2..5 → class 0..3`), ISUP 0/1 cases carrying `"instances": {}`, and the official 5-fold
+splits loaded.
 
 **Test.**
 ```bash
-python gcalf_data/sanity_checks.py    # all asserts green
+python -m gcalf_data.sanity_checks    # all asserts green
 ```
-covering: identical spacing/orientation across T2W/ADC/DWI; channel order `_0000/_0001/_0002`; every instance class ∈ {0..4}; instance-volume ids == `case.json` keys; per-class counts match the marksheet after the `k-1` shift; no `patient_id` crosses folds.
+covering: identical spacing/orientation across T2W/ADC/HBV; channel order `_0000/_0001/_0002`; every
+instance class ∈ {0..3}; instance-volume ids == `case.json` keys; no `patient_id` crosses folds.
 
-**Closes when.** Sanity checks pass, `nndet_prep` emits a plan with `in_channels=3` and `classifier_classes=5`, and `docs/data_report.md` records the benign/label decisions.
-**Watch.** `classifier_classes=6` means `build_labels.py` invented a benign class — fix the data, never the plan.
+**Closes when.** Sanity checks pass, `nndet_prep` emits a plan with `in_channels=3` and `classifier_classes=4`, and `docs/data_report.md` records the cohort and label decisions.
+**Watch.** Any GGG1 or benign foreground class means the labels were fabricated — fix the data, never the plan.
 
 ## M2 — Baseline forward pass
 
