@@ -1,7 +1,6 @@
 import torch 
 import torch.nn as nn
 from typing import Callable, Tuple, Sequence, Union, List, Optional
-from timm.models.swin_transformer import swin_base_patch4_window7_224_in22k as SwinTransformer
 from nndet.arch.encoder.abstract import AbstractEncoder
 from nndet.arch.blocks.basic import AbstractBlock
 

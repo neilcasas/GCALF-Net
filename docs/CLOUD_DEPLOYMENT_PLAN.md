@@ -333,7 +333,7 @@ docker run --rm --gpus all --ipc=host \
   "${IMAGE_REF}@${IMAGE_DIGEST}"
 ```
 
-Set `nnDet_raw`, `nnDet_prep`, and `nnDet_results` inside the container to these mounted paths. Avoid mounting the Docker socket. Use `--shm-size` instead of `--ipc=host` if the environment requires stricter isolation and profiling confirms it is sufficient.
+Set `det_data=/data/nnDet_raw` and `det_models=/data/nnDet_results` inside the container; this fork does not read `nnDet_raw`, `nnDet_prep`, or `nnDet_results` as environment variables. Avoid mounting the Docker socket. Use `--shm-size` instead of `--ipc=host` if the environment requires stricter isolation and profiling confirms it is sufficient.
 
 ## 12. Checkpoint and Artifact Synchronization
 

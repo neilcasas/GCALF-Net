@@ -1,52 +1,57 @@
-#Copyright 2020 Division of Medical Image Computing, German Cancer Research Center (DKFZ), Heidelberg, Germany
-#
-#Licensed under the Apache License, Version 2.0 (the "License");
-#you may not use this file except in compliance with the License.
-#You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-#Unless required by applicable law or agreed to in writing, software
-#distributed under the License is distributed on an "AS IS" BASIS,
-#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#See the License for the specific language governing permissions and
-#limitations under the License.
+FROM pytorch/pytorch:1.10.0-cuda11.3-cudnn8-devel
 
-# Contains pytorch, torchvision, cuda, cudnn
-FROM nvcr.io/nvidia/pytorch:21.11-py3
+ARG DEBIAN_FRONTEND=noninteractive
+ARG TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6"
+ARG PICAI_PREP_REV=9544f73c8c4f986d9a2b7e2fe7f7b3ba717c3d5b
+ARG PICAI_EVAL_REV=81d6067130cb264312ebcca220dd0784f074ae0e
+ARG MEDCAM_REV=fddd001a6da20229d33a0cb7c5d594fa432763d9
 
-ARG env_det_num_threads=6
-ARG env_det_verbose=1
+ENV det_data=/opt/data \
+    det_models=/opt/models \
+    det_num_threads=6 \
+    det_verbose=1 \
+    OMP_NUM_THREADS=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=5 \
+    TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 
-# Setup environment variables
-ENV det_data=/opt/data det_models=/opt/models det_num_threads=$env_det_num_threads det_verbose=$env_det_verbose OMP_NUM_THREADS=1
+RUN rm -f /etc/apt/sources.list.d/cuda*.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends build-essential git ninja-build \
+    && rm -rf /var/lib/apt/lists/* \
+    && conda create -y -n gcalf python=3.8 pip \
+    && conda clean -afy
 
-# Install some tools
-RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && apt-get install -y \
- git \
- cmake \
- make \
- wget \
- gnupg \
- build-essential \
- software-properties-common \
- gdb \
- ninja-build
+ENV PATH=/opt/conda/envs/gcalf/bin:${PATH}
 
-# updating requests and urllib3 fixed compatibility with my docker version
-RUN pip install numpy \
-  && pip install --upgrade requests \
-  && pip install --upgrade urllib3
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && python -m pip install --no-cache-dir \
+        torch==1.10.1+cu113 torchvision==0.11.2+cu113 torchaudio==0.10.1+cu113 \
+        --extra-index-url https://download.pytorch.org/whl/cu113
 
-# Install own code
-COPY ./requirements.txt .
-RUN mkdir ${det_data} \
-  && mkdir ${det_models} \
-  && mkdir -p /opt/code/nndet \
-  && pip install -r requirements.txt  \
-  && pip install hydra-core --upgrade --pre \
-  && pip install git+https://github.com/mibaumgartner/pytorch_model_summary.git
+RUN git clone https://github.com/DIAGNijmegen/picai_prep.git /opt/tools/picai_prep \
+    && git -C /opt/tools/picai_prep checkout --detach ${PICAI_PREP_REV} \
+    && git clone https://github.com/DIAGNijmegen/picai_eval.git /opt/tools/picai_eval \
+    && git -C /opt/tools/picai_eval checkout --detach ${PICAI_EVAL_REV} \
+    && git -C /opt/tools/picai_eval submodule update --init --recursive \
+    && git clone https://github.com/MECLabTUDA/M3d-Cam.git /opt/tools/M3d-Cam \
+    && git -C /opt/tools/M3d-Cam checkout --detach ${MEDCAM_REV}
 
-WORKDIR /opt/code/nndet
+WORKDIR /workspace/GCALF-Net
 COPY . .
-RUN FORCE_CUDA=1 pip install -v -e .
+
+RUN mkdir -p ${det_data} ${det_models} \
+    && python -m pip install --no-cache-dir -r requirements.txt pytest
+
+RUN FORCE_CUDA=1 python -m pip install --no-build-isolation -v -e .
+
+RUN python -m pip install --no-cache-dir \
+    -e /opt/tools/picai_prep \
+    -e /opt/tools/picai_eval \
+    -e /opt/tools/M3d-Cam
+
+ENV LD_LIBRARY_PATH=/opt/conda/envs/gcalf/lib/python3.8/site-packages/torch/lib:${LD_LIBRARY_PATH}
+
+RUN python -c "import medcam, nndet, nndet._C, picai_eval, picai_prep"
+
+CMD ["bash"]

@@ -80,7 +80,8 @@ conda activate pdhd
 
 3. **Install PyTorch** (adjust CUDA version as needed)
 ```bash
-pip install torch==1.10.0+cu113 torchvision==0.11.0+cu113 -f https://download.pytorch.org/whl/torch_stable.html
+pip install torch==1.10.1+cu113 torchvision==0.11.2+cu113 torchaudio==0.10.1+cu113 \
+  --extra-index-url https://download.pytorch.org/whl/cu113
 ```
 
 4. **Install nnDetection dependencies**

@@ -22,16 +22,15 @@
 
 ## M0 — Environment
 
-**Goal.** A single pinned environment (Python 3.8/3.9, torch ~1.10, nnDetection `csrc` compiled) in which every dependency of the thesis imports, plus the empty `gcalf/` code tree committed.
+**Goal.** A single pinned environment (Python 3.8, torch 1.10.1/CUDA 11.3, nnDetection `csrc` compiled) in which every dependency of the thesis imports, plus the empty `gcalf/` code tree committed.
 
 **Test.**
 ```bash
-python tests/test_imports.py                                  # green
-python -c "import nndet; print(nndet.__file__)"               # must resolve inside GCALF-Net/, not PDHD-Net/
+python -m pytest -q tests/test_imports.py tests/test_encoder_cpu.py tests/test_csrc_cuda.py
+python -c "import nndet, nndet._C; print(nndet.__file__)"     # must resolve inside GCALF-Net/, not PDHD-Net/
 python -c "import picai_prep, picai_eval, medcam"
-python -c "…Encoder(…)(torch.randn(1,3,16,64,64))"            # CPU forward, no shape error
 ```
-**Closes when.** All four commands exit 0, `environment.yml` + `env.lock.txt` committed on `feat/env-and-data`.
+**Closes when.** The tests run in the GPU Docker container (the CUDA test does not skip), and `environment.yml` + `env.lock.txt` are committed on `feat/env-and-data`.
 **Blocks.** Everything. Do not start M1 with a half-working env — `csrc` is the #1 blocker (`SPEC.md §14`).
 
 ## M1 — Data pipeline
