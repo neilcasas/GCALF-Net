@@ -7,7 +7,7 @@ def test_cuda_nms_extension_runs_on_3d_boxes():
     from nndet import _C
 
     boxes = torch.tensor(
-        [[0, 0, 4, 4, 0, 4], [1, 1, 5, 5, 1, 5], [10, 10, 14, 14, 10, 14]],
+        [[0, 0, 4, 4, 0, 4], [0.5, 0.5, 4, 4, 0.5, 4], [10, 10, 14, 14, 10, 14]],
         dtype=torch.float32,
         device="cuda",
     )
