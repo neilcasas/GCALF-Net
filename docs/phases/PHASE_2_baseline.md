@@ -45,12 +45,18 @@ That's it. **No architecture edits for the baseline.** Resist the urge to touch 
 Don't hand-roll epoch overrides — `nndet/conf/train/smoke.yaml` already exists and is exactly this: `max_num_epochs: 2`, `num_train_batches_per_epoch: 20`, `num_val_batches_per_epoch: 10`, `swa_epochs: 2`, `debug.num_cases_val: 2`. Select it as a Hydra config group:
 
 ```bash
-python GCALF-Net/scripts/train.py Task9xx_PICAI_TINY -o train=smoke
-python GCALF-Net/scripts/predict.py Task9xx_PICAI_TINY RetinaUNetV001_D3V001_3d -f 0
-python gcalf_eval/run_eval.py --task Task9xx_PICAI_TINY --fold 0
+scripts/run_m3_smoke.sh "$det_data/Task2201_PICAI_GGG" "$det_data/Task900_PICAI_TINY"
 ```
 
-Two CLI facts that bite: the model argument is the full identifier `<module>_<plan>` (`RetinaUNetV001_D3V001_3d`, as in the README), not the bare module name; and `-o` takes Hydra overrides, so the epoch key — if you ever do need it directly — is `trainer_cfg.max_num_epochs`, not `exp.num_epochs`.
+The runner builds six deterministic cases (one per GGG2--5, one additional positive, one benign), copies the held-out positive/benign pair into `imagesTs`/`labelsTs`, preprocesses it, then runs:
+
+```bash
+python scripts/train.py Task900_PICAI_TINY --sweep -o train=smoke
+python scripts/predict.py Task900_PICAI_TINY RetinaUNetV001_D3V001_3d -f 0
+python -m gcalf_eval.run_eval --task Task900_PICAI_TINY --model RetinaUNetV001_D3V001_3d --fold 0
+```
+
+`--sweep` is required because `scripts/predict.py` loads the generated `plan_inference.pkl`. The model argument is the full identifier `<module>_<plan>` (`RetinaUNetV001_D3V001_3d`), not the bare module name; `-o` selects Hydra's existing `train` config group; and the two configured base epochs are followed by the two configured SWA epochs. The `imagesTs` pair is a validation alias for plumbing only, never an independent test set.
 
 Exit when the pipeline runs start→finish and writes `metrics.csv`. Numbers will be garbage on 6 cases — that's fine.
 
