@@ -81,7 +81,7 @@ rules in [.gitignore](.gitignore).
 Run the focused code checks before using data:
 
 ```bash
-python -m pytest -q tests/gcalf/test_data_pipeline.py
+python -m pytest -q tests/gcalf/test_data_preparation.py tests/gcalf/test_data_sanity_checks.py
 python -m pytest -q tests/test_imports.py tests/test_encoder_cpu.py
 ```
 
