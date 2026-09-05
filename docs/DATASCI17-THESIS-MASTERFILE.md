@@ -166,7 +166,7 @@ The second modification addresses the feature fusion mechanism in the ConvSwin3D
 
 distinguishing clinically important and visually subtle cases. Chen et al. (2022) pointed out that simply combining convolutional and attention-based features through sequential operations or applying self-attention to concatenated representations may not lead to effective interaction between local and global features. Meanwhile, Cai et al. (2025), using the Interactive CNN and Transformer for Cross-Attention Fusion Network (IFC-Net) architecture, demonstrated that cross-attention fusion allows directed and asymmetric information exchange between CNN and Transformer components, better reflecting their complementary roles and leading to improved classification performance. Similarly, Badar et al. (2025), through Multi-Scale Cross and Self-Attention Network (MSCAS-Net), showed that combining self-attention and cross-attention mechanisms across multiple scales enhances the detection of subtle features, enabling more accurate discrimination between visually similar classes. To address this, the present study replaces WAF with CAF, enabling directed, branch-conditioned interaction between the CNN and Swin Transformer branches. 
 
-The 3D-LDFPN component of PDHD-Net is retained in GCALF-Net. The model also produces the same outputs in PDHD-Net.  The first is a detection result that localizes suspicious lesions within the prostate MRI volume, evaluated using FROC analysis at specified false-positive thresholds. The second is a five-class risk prediction generated for each detected lesion. The third is a voxel-level segmentation mask that delineates the boundary of the detected lesion, evaluated using the Dice Similarity Coefficient (DSC) to measure spatial overlap with ground-truth annotations. Additionally, Grad-CAM heatmaps are generated after prediction by extracting gradients from the final convolutional layer of the classification branch. 
+The 3D-LDFPN component of PDHD-Net is retained in GCALF-Net and consumes all five encoder feature levels. The model produces a one-class csPCa lesion detection, a voxel-level lesion segmentation, and a separate four-logit GGG2–5 prediction for each retained detection. The grade loss is applied only to matched lesions with resolved grade metadata; binary-only positives still train detection but are masked out of grade loss. Grad-CAM heatmaps are generated from the grade head after prediction.
 
 17 
 
@@ -174,7 +174,7 @@ Overall, the inputs, processes, and outputs form a complete pipeline for non-inv
 
 ## **E. Statement of the Problem** 
 
-The general problem of the study is reliance on invasive procedures to determine prostate cancer aggressiveness through Gleason score determination via tissue biopsy. This is due to the inability of Magnetic Resonance Imaging (MRI) to classify prostate tumor grades by itself. While current models have shown promising results using deep learning techniques seen in the paper of Wang et al. (2025), there is a performance disparity across lower and intermediate grade groups. Wang et al. (2025) reported an averaged sensitivity of 85.5% for GGG 1-4 compared to a 96.7% for GGG 5. This poses an issue as it is critical to differentiate between GGG 2 from GGG 3, as the GS (4 + 3) in GGG 3 is a worse prognosis than the (3 + 4) in GGG 2, where it is a major clinical threshold in transitioning from monitoring of the cancer to active medical treatment. The classification task is a five-class problem: GGG 1 (low risk), GGG 2 (favorable intermediate risk), GGG 3 (unfavorable intermediate risk), GGG 4 (high risk), and GGG5 (extremely high risk).  To address this, the model in this research implements a modified PDHD-Net architecture with a learnable frequency filter and cross-attention fusion. 
+The general problem of the study is reliance on invasive tissue biopsy to determine prostate cancer aggressiveness. Although Wang et al. (2025) reported promising deep-learning results, performance differed across grades, particularly at the clinically important GGG2/GGG3 boundary. PI-CAI does not provide a spatial GGG1 foreground annotation: ISUP ≤1 is background under its csPCa reference standard. The present task therefore detects csPCa (ISUP ≥2) and grades detected, grade-resolved lesions across four classes, GGG2–5. GCALF-Net evaluates whether learnable frequency filtering and cross-attention fusion improve that defensible lesion-level endpoint.
 
 ## **Specifically, this study aims to answer the following:** 
 
@@ -182,7 +182,7 @@ _1. How does the adapted PDHD-Net baseline perform on the PI-CAI dataset ?_
 
 18 
 
-_**2.** How do the proposed architectural modifications perform in five-class Gleason_ 
+_**2.** How do the proposed architectural modifications perform in four-class lesion-level Gleason_
 
 _Grade Group classification? Specifically, how does performance vary under the following configurations:_ 
 
@@ -206,9 +206,9 @@ The primary objective of this study is to develop and evaluate a modified hybrid
 
 19 
 
-1. To establish and evaluate the baseline performance of the adapted PDHD-Net architecture on the PI-CAI dataset across the five-class Gleason Grade Group classification framework (GGG 1, GGG 2, GGG 3, GGG 4, and GGG 5). 
+1. To establish and evaluate a reconstructed PDHD-Net baseline — the paper's FDSF and WAF mechanisms over a five-level encoder — on PI-CAI for csPCa detection and lesion-level GGG2–5 grading. The mechanisms follow Wang et al. (2025); the five-level depth is a decision of this study, fixed so that every encoder output reaches the 3D-LDFPN decoder.
 
-2. To evaluate the classification performance of the three model configurations: PDHD-Net with the Learnable Frequency Filter (LFF) only, PDHD-Net with the Cross-Attention Fusion (CAF) only, and the full proposed GCALF-Net incorporating both — in order to determine the individual and combined contribution of each architectural modification to five-class Gleason Grade Group classification. 
+2. To evaluate LFF+WAF, fixed-FDSF+CAF, and LFF+CAF against the fixed-FDSF+WAF control, thereby estimating the individual and combined contributions of the frequency and fusion modifications to GGG2–5 classification.
 
 3. To determine whether the full proposed model (GCALF-Net) yields a statistically significant improvement in classification performance compared to the adapted PDHD-Net model. 
 
@@ -216,11 +216,11 @@ The primary objective of this study is to develop and evaluate a modified hybrid
 
 ## **G. Scope and Limitations** 
 
-This study focuses on the development of a hybrid deep learning architecture that incorporates a Convolutional Neural Network (CNN) and a Swin Transformer for the non-invasive classification of prostate cancer aggressiveness using T2-weighted (T2W), Apparent Diffusion Coefficient (ADC), and Diffusion-Weighted Imaging (DWI) scans derived from biparametric MRI (bpMRI). The classification is based on five Gleason Grade Groups (GGG): low risk (GGG 1), favorable intermediate risk (GGG 2), 
+This study focuses on a five-level hybrid CNN–Swin Transformer for csPCa lesion detection and non-invasive GGG2–5 classification using T2W, ADC, and HBV bpMRI. All 1,500 PI-CAI cases train detection; only lesions with resolved spatial grades supervise the grade head. GGG1 is a detection-negative condition under the PI-CAI endpoint, not a foreground grading class. The target grades are favorable intermediate risk (GGG2),
 
 20 
 
-unfavorable intermediate risk (GGG 3), high risk (GGG 4), and extremely high risk (GGG 5). However, the study is limited to the following: 
+unfavorable intermediate risk (GGG3), high risk (GGG4), and extremely high risk (GGG5). The study is limited to the following:
 
 - The study exclusively utilizes the PI-CAI Challenge dataset, which, while multi-center and multi-vendor (11 institutions, Siemens and Philips), remains a single publicly available dataset. 
 
@@ -228,7 +228,7 @@ unfavorable intermediate risk (GGG 3), high risk (GGG 4), and extremely high ris
 
 - The study does not aim to replace histopathological biopsy but rather to support physicians' clinical judgment. 
 
-- The hybrid architecture is limited to bpMRI sequences (T2W, ADC, DWI) and does not incorporate full multiparametric MRI (mpMRI) sequences such as dynamic contrast-enhanced (DCE) imaging. 
+- The hybrid architecture is limited to bpMRI sequences (T2W, ADC, HBV) and does not incorporate full multiparametric MRI sequences such as dynamic contrast-enhanced imaging.
 
 - Demographic and clinical patient variables (e.g., PSA levels and age) were not included in the classification model. 
 
@@ -547,17 +547,17 @@ This chapter presents the methodology of the study, including the hypotheses, re
 
 The study focused on developing GCALF-Net, a modified hybrid CNN–Swin Transformer architecture integrating a Learnable Frequency Filter and a Cross-Attention Fusion module into the baseline PDHD-Net framework, for non-invasive Gleason Grade Group classification using biparametric MRI from the PI-CAI dataset. Therefore, the study hypothesized that: 
 
-(1) _H_ ₀: Replacing the fixed spherical frequency mask in the FDSF module with a Learnable Frequency Filter did not result in a statistically significant improvement in classification performance across all Gleason Grade Groups compared to the baseline PDHD-Net. 
+(1) _H_ ₀: Replacing the fixed spherical frequency mask in the FDSF module with a Learnable Frequency Filter did not result in a statistically significant improvement in lesion-level GGG2–5 classification performance compared with the fixed-FDSF+WAF baseline. 
 
-_Hₐ_ : Replacing the fixed spherical frequency mask in the FDSF module with a Learnable Frequency Filter resulted in a statistically significant improvement in classification performance across all Gleason Grade Groups compared to the baseline PDHD-Net. 
+_Hₐ_ : Replacing the fixed spherical frequency mask in the FDSF module with a Learnable Frequency Filter resulted in a statistically significant improvement in lesion-level GGG2–5 classification performance compared with the fixed-FDSF+WAF baseline. 
 
-(2) _H_ ₀: Replacing the window-based self-attention mechanism in the ConvSwin3D encoder with a Cross-Attention Fusion module did not result in a statistically significant improvement in classification performance across all Gleason Grade Groups compared to the baseline PDHD-Net. 
+(2) _H_ ₀: Replacing WAF with CAF at the same declared encoder fusion locations did not result in a statistically significant improvement in lesion-level GGG2–5 classification performance compared with the fixed-FDSF+WAF baseline. 
 
-_Hₐ_ : Replacing the window-based self-attention mechanism in the ConvSwin3D encoder with a Cross-Attention Fusion module resulted in a statistically significant improvement in classification performance across all Gleason Grade Groups compared to the baseline PDHD-Net. 
+_Hₐ_ : Replacing WAF with CAF at the same declared encoder fusion locations resulted in a statistically significant improvement in lesion-level GGG2–5 classification performance compared with the fixed-FDSF+WAF baseline. 
 
-(3) _H_ ₀: The integration of both the Learnable Frequency Filter and the Cross-Attention Fusion module in the proposed GCALF-Net did not produce a statistically significant improvement in classification performance across all Gleason Grade Groups compared to the baseline PDHD-Net. 
+(3) _H_ ₀: The integration of both LFF and CAF in GCALF-Net did not produce a statistically significant improvement in lesion-level GGG2–5 classification performance compared with the fixed-FDSF+WAF baseline. 
 
-_Hₐ_ : The integration of both the Learnable Frequency Filter and the Cross-Attention Fusion module in the proposed GCALF-Net produced a statistically significant improvement in classification performance across all Gleason Grade Groups compared to the baseline PDHD-Net. 
+_Hₐ_ : The integration of both LFF and CAF in GCALF-Net produced a statistically significant improvement in lesion-level GGG2–5 classification performance compared with the fixed-FDSF+WAF baseline. 
 
 (4) H₀: The Grad-CAM-generated heatmaps produced by the proposed GCALF-Net are not clinically acceptable based on PI-RADS version 2 criteria, as evaluated by three (3) practicing urologists using a Likert scale. 
 
@@ -567,17 +567,17 @@ Hₐ: The Grad-CAM-generated heatmaps produced by the proposed GCALF-Net are cli
 
 ## **B. Research Methods** 
 
-This study employed an experimental research design to test the hypotheses that the integration of a Learnable Frequency Filter (LFF) and a Cross-Attention Fusion (CAF) module into the baseline PDHD-Net architecture significantly improves Gleason Grade Group (GGG) classification performance, and that the resulting Grad-CAM 
+This study employed an experimental research design to test the hypotheses that the integration of a Learnable Frequency Filter (LFF) and a Cross-Attention Fusion (CAF) module into the reconstructed paper-derived PDHD-Net baseline significantly improves lesion-level GGG2–5 classification performance, and that the resulting Grad-CAM
 
-visualizations are clinically acceptable based on PI-RADS version 2 criteria. The study utilized a different dataset from Wang et al. (2025), specifically the PI-CAI public dataset, which consists of three MRI sequences: the T2W, ADC, and DWI, instead of the four MRI sequences used in the original PDHD-Net architecture, namely T2W, ADC, DWI1000 and DWI3000. 
+visualizations are clinically acceptable based on PI-RADS version 2 criteria. The study uses the 1,500-case PI-CAI public training and development cohort, with three biparametric MRI inputs: T2W, ADC, and high-b-value DWI (HBV). This differs from Wang et al. (2025), whose private-data PDHD-Net used T2W, ADC, DWI1000, and DWI3000.
 
-The experimental phase centers on testing the proposed architectural modifications against a known baseline, which is the original PDHD-Net of Wang et al. (2025), adapted to accept three-channel bpMRI input consisting of T2W, ADC, and DWI from the PI-CAI public dataset. Four model configurations were implemented for comparison: (1) the adapted baseline PDHD-Net, (2) PDHD-Net with the Learnable Frequency Filter (LFF) only, (3) PDHD-Net with the Cross-Attention Fusion (CAF) module only, and (4) the full proposed model, GCALF-Net, which integrates both LFF and CAF. All model variants were trained on the same PI-CAI dataset using identical 
+The experimental phase compares four configurations built on one fixed five-level encoder and one common preprocessing/data contract: (1) the reconstructed paper-derived PDHD-Net control with input-level fixed 3D frequency-domain separation and shunting (FDSF) plus Window Attention Fusion (WAF), (2) LFF plus WAF, (3) fixed FDSF plus CAF, and (4) full GCALF-Net with LFF plus CAF. The released repository's wavelet/channel-light execution path is not mislabeled as the paper baseline. All model variants use the same PI-CAI cases, folds, preprocessing, five-level backbone, decoder, heads, schedule, and seeds; only the frequency and fusion factors differ.
 
-preprocessing steps and evaluation protocols to ensure a fair comparison. To address the inherent class imbalance within the dataset, minority GGG classes, specifically GGG 4 
+preprocessing steps and evaluation protocols to ensure a fair comparison. The detector retains nnDetection's focal loss over all 1,500 cases. For the separate grade head, inverse-frequency class weights are computed only from grade-supervised lesions in each fold's training partition and normalized to mean one; validation information and benign cases do not enter those weights. 
 
 50 
 
-and 5 were subjected to a class-weighted loss function was applied during training to ensure that high-risk lesions, specifically GGG 4 and 5 were not overshadowed by majority benign cases. 
+GGG4 and GGG5 therefore receive larger grade-loss weights when they are rarer, without changing the detection loss or assigning grades to binary-only lesions. 
 
 The same training hyperparameters, including learning rate, batch size, number of epochs, and loss function, were applied across all configurations, with the exception of hyperparameters specific to the introduced modules, which have no counterparts in the baseline model. 
 
@@ -593,39 +593,39 @@ Grad-CAM provides a transparent interpretability that allows a practicing urolog
 
 ## **C. Research Design** 
 
-This study employs an ablation experimental design to systematically evaluate the individual and combined effects of two proposed architectural modifications on Gleason Grade Group classification performance. This methodology aligns with Wang et al. (2025), who validated each component of the original PDHD-Net by using nn-Detection as a baseline and sequentially incorporating ConvSwin3D, the Frequency-Band-Shunting Feature Enhancement (FMB) module, and the 3D Learnable Bi-Directional Feature Fusion Pyramid Network (3D-LDFPN) to isolate the contribution of each module to false-positive reduction and segmentation consistency. The present study adopts this progressive approach for the Learnable Frequency Filter and the Cross-Attention Fusion module, utilizing the complete PDHD-Net architecture adapted to biparametric MRI as the baseline rather than nn-Detection. 
+This study employs a 2×2 ablation design to evaluate the individual and combined effects of two architectural factors on lesion-level GGG2–5 classification: fixed FDSF versus LFF, and WAF versus CAF. The four arms are fixed-FDSF+WAF, LFF+WAF, fixed-FDSF+CAF, and LFF+CAF. All share the same five-level encoder, five-input 3D-LDFPN decoder, preprocessing manifest, cases, folds, seeds, and training schedule. This design follows Wang et al. (2025)'s component-isolation principle while using the reconstructed paper-derived PDHD-Net control rather than the released repository's wavelet/channel-light execution path.
 
 ## **1. Planning Phase** 
 
-During the planning stage, the researchers identified the study objectives and formulated hypotheses to guide the research. To evaluate these hypotheses, the PI-CAI Grand Challenge public dataset was selected as the exclusive data source. This dataset consists of a large-scale, multi-center collection of biparametric MRI examinations, including T2-weighted imaging (T2W), Apparent Diffusion Coefficient (ADC) maps, and Diffusion-Weighted Imaging (DWI) sequences, each paired with biopsy-confirmed ISUP grade labels spanning 
+During the planning stage, the researchers identified the study objectives and formulated hypotheses to guide the research. The PI-CAI Grand Challenge public training and development dataset was selected as the exclusive data source. It contains 1,500 multi-centre biparametric MRI examinations with T2W, ADC, and HBV. The study detects clinically significant prostate cancer (csPCa, ISUP ≥2) with one foreground detection class and grades only spatially resolved positive lesions as
 
 52 
 
-GGG 1 to 5. The PI-CAI dataset was selected for its standardized, publicly accessible ground-truth annotations and its comprehensive coverage of GGGs, which is essential for evaluating classification performance at the intermediate-risk boundary. The multi-center composition further enhances the external validity of the experimental findings. An ablation design with four distinct model variants (Models A through D) was implemented to isolate the contribution of each proposed modification prior to assessing their combined effect. 
+GGG2–5. ISUP 0 and GGG1 cases are detection negatives under PI-CAI's csPCa definition; GGG1 is not a foreground grade because no spatial GGG1 lesion mask exists. All 1,500 cases train the detector, while the separate four-logit grade head receives loss only from grade-resolved lesions. An ablation design with Models A through D isolates the frequency and fusion modifications individually and jointly.
 
 ## 2. **Pre-Processing of Dataset** 
 
-The study will do a treatment of the dataset before entering the model as it utilizes the PI-CAI dataset over the Prostate-X2 from the study of Wang. Harmonization will be via N4 Bias Field Correction which enhances homogeneity from the different vendors that introduced lighting biases (Dovrou et al. 2023). This will be then followed by an isotropic sampling to 1 x 1 x 1mm spacing as different hospitals take image slicing differently. 
+Each case is processed by an inference-safe pipeline. N4 bias-field correction is applied only to T2W; ADC is quantitative and HBV remains outside N4 by protocol. A single reference grid is defined by the corrected T2W's native in-plane geometry at a fixed 3.0 mm slice spacing. ADC and HBV are resampled onto that grid with linear interpolation in one pass, while the whole-gland and lesion masks always use nearest-neighbour interpolation. Linear rather than cubic interpolation is used for the scans because cubic kernels overshoot at edges and can produce out-of-range or negative values on a quantitative diffusion map. No 1×1×1 mm isotropic resampling is performed.
 
-The original PI-CAI had a high resolution of 640 x 640 per slice. Processing a 3D stack that large is too computational intensive, therefore it will be spatially resampled to 256 x 256 by center-cropping, leaving only the prostate to be featured in the image. The 3D structure of the images is anisotropic and inconsistent as well, with varying depth (slice) depending on the patient scan. Standardization will be applied to the dataset to set the fixed depth to 32 slices 
+After validating the resampled whole-gland mask, an in-plane index crop covering a fixed 128 mm field of view is centred on the prostate centroid, preserving native T2W in-plane spacing. The crop is specified in millimetres rather than voxels because PI-CAI's T2W in-plane spacing ranges from 0.234 mm to 0.625 mm across scanners; a fixed voxel window would cover between 60 mm and 160 mm of anatomy depending on the acquisition, making anatomical context incomparable between patients and clipping lesions in the most finely sampled scans. The lesion annotation never selects or changes the crop because it is unavailable at inference; it is used only afterward for exhaustive retention quality control. An invalid gland mask uses a predeclared T2W geometric-centre fallback and is reported. The slice axis is then padded or cropped about its geometric centre to 32 slices, giving 96 mm of coverage at the fixed 3.0 mm spacing.
 
 53 
 
-using linear interpolation. Finally, Z-score normalization will be applied to the pre-processed dataset to standardize pixel density. 
+This geometry is the raw nnDetection task input rather than the array presented to the network: nnDetection first crops each case to its non-zero bounding box, then resamples to the planner's target spacing, then extracts training patches. What the contract fixes downstream is therefore the 3.0 mm slice spacing, a prostate-centred field of view of constant physical size, and exactly one per-case, per-modality `nonCT` z-score normalization pass applied by nnDetection; the raw-task builder does not normalize a second time. Before training, all 425 positive masks are audited for voxel and component retention, and every exclusion is frozen identically across the four ablation arms under a rule declared before the audit is run.
 
 ## 3. **Research Analysis** 
 
-During the analysis phase, the structure and composition of the PI-CAI dataset were examined to inform both the preprocessing strategy and the experimental evaluation protocol. The dataset consists of 1,500 cases and 776 ISUP-annotated lesions. The class distribution for the annotated set is notably imbalanced: GGG 1 represents 40.1% of lesions, GGG 2 accounts for 33.5%, GGG 3 for 14.0%, GGG 4 for 5.3%, and GGG 5 for 7.1%. This significant imbalance, with lower-grade cases substantially outnumbering higher-grade cases, was identified as a critical factor necessitating methodological mitigation to prevent the model from favoring majority classes during training and to ensure that evaluation metrics accurately reflect performance across all grade groups. 
+During the analysis phase, the structure and composition of the PI-CAI dataset were examined to inform both the preprocessing strategy and the experimental evaluation protocol. The dataset consists of 1,500 cases, of which 425 are csPCa-positive (ISUP ≥ 2) and 1,075 are benign or indolent, and 776 ISUP-annotated lesions (ISUP 1: 40.1%, ISUP 2: 33.5%, ISUP 3: 14.0%, ISUP 4: 5.3%, ISUP 5: 7.1%). Two consequences follow for this study. First, ISUP 1 lesions are not a grading class: under PI-CAI's csPCa reference standard they are background, so the grading endpoint is GGG2–5 and the ISUP 1 share of the marksheet does not enter the grade head at all. Second, only a subset of positive lesions carries a spatial grade annotation, so the grade-supervised denominator is much smaller than 776 and is reported separately from the 1,500-case detection denominator. The residual imbalance among GGG2–5 — where GGG 4 and GGG 5 are the smallest classes — is what necessitates the class-weighted grade loss described below.
 
 To address this imbalance, stratified random sampling is implemented at the patient level to ensure proportional representation of each Gleason Grade Group across all cross-validation folds. Patient-level sampling, rather than lesion or slice-level sampling, is used to prevent data leakage, which may occur if multiple slices from the same patient appear in both training and evaluation partitions, thereby artificially inflating performance estimates. The dataset is divided into five folds for cross-validation, with every patient case serving as a test case exactly once across the five iterations. 
 
 54 
 
-Within the training folds, a class-weighted loss function is employed to prevent the model from favoring majority classes.In class-weighted loss function, to ensure that high-risk lesions, specifically GGG 4 and 5 are not overshadowed by the majority benign cases, a weighted loss function is applied during the optimization phase. By assigning higher penalty weights to misclassifications within these critical groups, maintaining classification accuracy on high-risk lesions. 
+Within each training fold, inverse-frequency weights normalized to mean one are calculated from that fold's grade-supervised GGG2–5 lesions only and applied to the four-logit grade-head cross-entropy. The one-class csPCa detector continues to use nnDetection's focal, box-regression, and segmentation losses. This separation prevents benign cases or grade-unsupervised positive lesions from being treated as grading classes. 
 
 ## 3. **Designing the Model and Optimization Strategy** 
 
-This study centers on the development of GCALF-Net, a modified version of the PDHD-Net architecture described by Wang et al. (2025), which incorporates two targeted architectural modifications. Four model variants are constructed and evaluated under identical experimental conditions to isolate the contribution of each modification. Model A serves as the baseline, consisting of the original PDHD-Net adapted to accept three-channel biparametric MRI input (T2W, ADC, DWI) instead of the original four-channel multiparametric MRI input (T2W, ADC, DWI1000, DWI3000). Model B incorporates the Learnable Frequency Filter (LFF), which replaces the fixed spherical frequency mask in the FDSF module with a trainable Fourier-domain weight matrix. This modification enables the model to optimize the frequency decomposition boundary during training, rather than relying on a predefined hyperparameter. Model C incorporates the Cross-Attention Fusion (CAF) module, which replaces the window-based self-attention fusion mechanism in the ConvSwin3D encoder with a cross-attention mechanism. This approach allows each branch, the CNN and the 
+This study centers on GCALF-Net, a modified PDHD-Net architecture with two targeted factors. Every model uses exactly five encoder feature levels and all five outputs feed 3D-LDFPN. Model A is the reconstructed paper-derived three-channel FDSF+WAF control. Model B replaces only FDSF's fixed frequency response with LFF at the same input location. Model C retains fixed FDSF and replaces WAF one-for-one with CAF at the same declared fusion levels. This approach allows each branch, the CNN and the
 
 55 
 
@@ -663,7 +663,7 @@ including training evaluation curves and Grad-CAM heatmaps produced for clinical
 
 ## **c. People** 
 
-Expert consultation was sought from three practicing urologists, who collectively served as the clinical validators for the study's interpretability evaluation. Each urologist independently assessed Grad-CAM heatmaps generated for 30 randomly selected stratified test cases — approximately 12 GGG 1, 10 GGG 2, 4 GGG 3, and 4 GGG 4 and 5 cases — using a five-point Likert scale to measure alignment with PI-RADS version 2 criteria. Specifically, the evaluation was based on the following three questions: 
+Expert consultation was sought from three practicing urologists, who collectively served as the clinical validators for the study's interpretability evaluation. Each urologist independently assessed Grad-CAM heatmaps generated for 30 randomly selected test cases, stratified across the four target grade groups — approximately 13 GGG 2, 8 GGG 3, 4 GGG 4, and 5 GGG 5 cases, proportions adjusted to the grade-supervised counts resolved in the data pipeline so that GGG 4 and GGG 5 are not crowded out — using a five-point Likert scale to measure alignment with PI-RADS version 2 criteria. Specifically, the evaluation was based on the following three questions: 
 
 1. To what extent do the high-intensity regions of the Grad-CAM heatmap correspond to clinically suspicious regions of interest (ROI)? 
 
@@ -681,7 +681,7 @@ architectural design decisions, evaluation framework, and overall scientific rig
 
 ## **d. Data Source** 
 
-The study drew exclusively on the PI-CAI Grand Challenge public dataset. The dataset comprises bpMRI scans (T2W, ADC, DWI), annotated with histopathologically confirmed GGG labels. This publicly available, multi-institutional dataset was selected to ensure reproducibility and to provide a sufficiently large and clinically representative sample for training and evaluating the proposed model across all four target grade groups. 
+The study drew exclusively on the 1,500-case PI-CAI public training and development cohort. It comprises T2W, ADC, and HBV bpMRI with a csPCa reference standard. All cases support detection training, but only grade-resolved lesion annotations support the separate GGG2–5 grade loss; binary-only positive masks are not assigned fabricated grades.
 
 ## **E. Sampling and Data Gathering Procedure** 
 
@@ -719,7 +719,7 @@ The PI-CAI Grand Challenge public dataset is the sole data source for this study
 
 
 
-The class distribution of the PI-CAI dataset is presented in Table 3.0. GGG 1 accounts for 40.1% of lesions, GGG 2 for 33.5%, GGG 3 for 14.0%, GGG 4 for 5.3%, and GGG 5 for 7.1%, totaling 776 annotated lesions across 1,476 patients. This pronounced imbalance, with lower-grade cases substantially outnumbering higher-grade cases, necessitates the use of stratified sampling to preserve class proportions across all folds and the application of weighted loss functions to prevent the model from favoring majority classes during training. 
+The ISUP distribution of the PI-CAI dataset is presented in Table 3.1: ISUP 1 accounts for 40.1% of lesions, ISUP 2 for 33.5%, ISUP 3 for 14.0%, ISUP 4 for 5.3%, and ISUP 5 for 7.1%, totaling 776 annotated lesions across 1,476 patients. Of these, ISUP 1 lesions are detection negatives rather than a grading class, so the grading task operates over the GGG2–5 remainder, within which GGG 4 (5.3%) and GGG 5 (7.1%) are the smallest groups. This pronounced imbalance necessitates the official patient-disjoint stratified folds, which preserve grade proportions across all folds, and the class-weighted grade loss described below, which prevents the grade head from favoring GGG 2 and GGG 3.
 
 Stratified random sampling is implemented to address the inherent class imbalance in Gleason Grade Group distributions within prostate cancer datasets. Purely 
 
@@ -753,7 +753,7 @@ Specifically, a One-Way Analysis of Variance (ANOVA) was employed, followed by T
 
 ## **a. Area Under the Receiver Operating Characteristic Curve (AUROC)** 
 
-This metric measures how well the model distinguishes between the five Gleason Grade Group classes. Since AUROC is originally designed for binary classification, a One-vs-Rest (OvR) approach is applied for this multi-class task, where each GGG class is evaluated against all other classes. This allows for a clearer assessment of how well the model separates each grade group from the rest. The formula for AUROC is presented in (3.1) 
+This metric is reported at two levels, which are never collapsed into one another. At the case level it measures how well the model separates csPCa-positive from negative cases across the full 1,500-case cohort, which is the binary form AUROC was designed for. At the grade level it measures how well the model distinguishes the four target Gleason Grade Group classes over grade-supervised matched lesions; since AUROC is originally designed for binary classification, a One-vs-Rest (OvR) approach is applied there, with each of GGG 2–5 evaluated against the other three. The formula for AUROC is presented in (3.1) 
 
 **==> picture [162 x 33] intentionally omitted <==**
 
@@ -789,7 +789,7 @@ a multi-class context, this evaluates the model’s ability to correctly
 
 identify the presence of a specific Gleason grade. The formula for 
 
-Sensitivity for each class _i_ (GGG 1–5), is presented in (3.3) 
+Sensitivity for each class _i_ (GGG2–5), is presented in (3.3)
 
 **==> picture [113 x 26] intentionally omitted <==**
 
@@ -813,9 +813,7 @@ negative cases. This metric is reported per class to determine how
 
 precisely the model identifies each Gleason grade and manages critical 
 
-clinical boundaries. The formula for Specificity for each class i (GGG 
-
-1–5), is presented in (3.4). 
+clinical boundaries. The formula for Specificity for each class i (GGG2–5), is presented in (3.4). 
 
 **==> picture [115 x 26] intentionally omitted <==**
 
@@ -883,15 +881,16 @@ The Confusion Matrix provides a granular $5 \times 5$ evaluation of the four mod
 
 68 
 
-## **Table 3.2.** _5x5 Confusion Matrix_ 
+## **Table 3.2.** _4x4 Grade Confusion Matrix_ 
 
-||GGG 1|GGG 2|GGG 3|GGG 4|GGG 5|
-|---|---|---|---|---|---|
-|GGG 1|TP|||||
-|GGG 2||TP||||
-|GGG 3|||TP|||
-|GGG 4||||TP||
-|GGG 5|||||TP|
+Computed over grade-supervised lesions matched to a detection, with the grade-matched denominator reported alongside the 1,500-case detection denominator.
+
+||GGG 2|GGG 3|GGG 4|GGG 5|
+|---|---|---|---|---|
+|GGG 2|TP||||
+|GGG 3||TP|||
+|GGG 4|||TP||
+|GGG 5||||TP|
 
 
 
@@ -901,7 +900,7 @@ This strategy is employed to ensure that the model’s performance
 
 is consistent and not dependent on a specific random split of the data. The dataset is partitioned into five distinct folds ( _k_ = 5), where each fold 
 
-maintains a proportional representation of the five Gleason Grade Groups (Stratified) and ensures that all image slices from a single patient are kept 
+maintains a proportional representation of the four target Gleason Grade Groups, GGG2–5 (Stratified) — verified so that every held-out fold contains at least one grade-supervised lesion of each — and ensures that all image slices from a single patient are kept 
 
 together (Patient-Level) to prevent data leakage. The final reported 
 
@@ -1472,4 +1471,3 @@ MRI-invisible prostate cancers using a weakly supervised deep learning model.
 _International Journal of Biomedical Imaging_ , _2024_ , 2741986. 
 
 https://doi.org/10.1155/2024/2741986 
-

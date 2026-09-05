@@ -11,3 +11,16 @@ fixed decisions that ISUP 0/1 (benign + GGG1) cases are zero-instance detection 
 that the binary `Pooch25`/`Bosma22a` masks are **detection-positive but grade-unsupervised** unless
 individually resolved by the Phase 1 audit — they are not excluded from the cohort, only from the
 grade head's training signal. See `docs/ARCHITECTURE.md §3` and `docs/adr/0002-*.md` D2/D3.
+
+The generated report also records whole-gland QC and exhaustive crop retention for all 425
+positive masks: pre/post voxel and connected-component counts, separate in-plane/depth clipping,
+the target-independent fallback (if any), and the disposition of every excluded case. It must
+confirm that lesion annotations never selected crop coordinates and that every ablation arm uses
+the same frozen case set and preprocessing-manifest hash.
+
+**Retention numbers belong here, not in prose.** They are produced by
+`gcalf_data/audit_crop_retention.py` — **not yet committed** — and emitted into this file by
+`sanity_checks`, so that regenerating the report cannot silently drop them. The interim figures
+recorded in `docs/ARCHITECTURE.md §3` and `docs/phases/PHASE_1_data_pipeline.md §1.2.1` were
+measured under the **superseded 256-voxel crop rule** and are pending re-measurement at the 128 mm
+field of view; do not cite them as the cohort's retention result.

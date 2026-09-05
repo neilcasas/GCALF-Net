@@ -7,6 +7,10 @@
 The image was rebuilt after adding the remaining empty `gcalf/` scaffold modules (`fdr.py`,
 `waf.py`, `grade_head.py` — `caf.py`, `lff.py`, `registry.py`, `__init__.py` already existed):
 
+`fdr.py` is the historical scaffold name from that build. Under ADR 0002's aligned terminology,
+Phase 2 replaces it with `fdsf.py`; this record otherwise remains a factual image-build log and is
+not updated to match later naming.
+
 - Base image: `pytorch/pytorch:1.10.0-cuda11.3-cudnn8-devel@sha256:913e6689c5958b187e65561e528ec6c3ce8a02deedcdd38cb50c9cab301907bb` (unchanged).
 - Final image: `gcalf:m0@sha256:5bbba84ddc12ffa932c280c903e6ceba883c749a05faa3b6b3fe24dd90461bb7`.
 - `docker run --rm gcalf:m0 python -m pytest -q tests` (no GPU): **22 passed, 2 skipped**

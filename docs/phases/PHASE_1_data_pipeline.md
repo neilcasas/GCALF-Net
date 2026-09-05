@@ -53,14 +53,26 @@ This audit requires SimpleITK/numpy connected-component labeling (`scipy.ndimage
 
 1. Pass the PI-CAI public MHA archive and `picai_labels` checkout to a rebuilt
    `gcalf_data.prepare_picai build`, with the official `picai_nnunet/splits.json`.
-2. `picai_prep` creates the three-channel nnU-Net data (`_0000`=T2W, `_0001`=ADC, `_0002`=HBV —
-   assert this order). Apply the preprocessing contract from `ARCHITECTURE.md §3`:
+2. Build the three-channel nnU-Net data (`_0000`=T2W, `_0001`=ADC, `_0002`=HBV — assert this
+   order). Apply the preprocessing contract from `ARCHITECTURE.md §3` identically for training,
+   validation, test, and deployment:
    - N4 bias correction on **T2W only**.
-   - Resample T2W/ADC/HBV onto a common reference grid.
-   - In-plane center-crop 640→256 using the whole-gland mask
-     (`picai_labels/anatomical_delineations/whole_gland/`, present for all 1,500 cases) to center it.
-   - Slice axis resampled to a **fixed 3.0 mm spacing**, then pad/crop to 32 slices.
-   - Per-case, per-modality z-score normalization.
+   - Build one reference grid from the corrected T2W: native in-plane geometry at **3.0 mm slice
+     spacing**. Resample ADC/HBV onto it with **linear** interpolation (not B-spline — it overshoots
+     and can emit negative ADC) and every mask with nearest-neighbour, in a single pass.
+   - Validate the whole-gland mask, then in-plane centre-crop to a **fixed 128 mm field of view**
+     using only its centroid. Specify it in millimetres, not voxels: T2W in-plane spacing runs
+     0.234–0.625 mm across the archive, so a 256-voxel window spans 60–160 mm depending on scanner
+     (`ARCHITECTURE.md §3`). Voxel extent therefore varies per case; `nndet_prep` resamples in-plane
+     anyway. An empty/implausible gland uses the predeclared T2W geometric-centre fallback and is
+     logged.
+   - Do **not** pass the lesion mask into the crop-centre resolver. No union or lesion-only fallback
+     is allowed; lesion annotations are unavailable at inference.
+   - Geometrically pad/crop the slice axis to 32 slices, padding with zeros. Preserve the current
+     geometric depth rule while its full-cohort audit shows no added clipping; any future gland-z
+     rule requires re-auditing all positives.
+   - Do not z-score here. Let nnDetection apply its `nonCT` per-case/per-modality normalization once
+     after planned resampling.
    - **Masks: nearest-neighbour interpolation only, never linear** — verify this explicitly for
      every mask-resampling call; a linear-interpolated `{0,2,3,4,5}`-valued mask silently
      fabricates nonexistent grade values.
@@ -68,12 +80,58 @@ This audit requires SimpleITK/numpy connected-component labeling (`scipy.ndimage
    lesions (220 `human_expert` + audit-recovered `Pooch25`, §1.1) additionally get `grade ∈
    {2,3,4,5}`, `grade_source`, `grade_supervised: true`. Every other positive lesion gets
    `grade_supervised: false` and no grade field. Benign/GGG1 cases get `"instances": {}`.
-4. `nnunet2nndet` → nnDetection task layout. **The task's own geometry (step 2) is the raw input
+4. After the crop, audit all 425 positive cases. Record input/output lesion voxel counts and
+   connected-component counts separately for in-plane and depth operations. A non-empty mask that
+   becomes empty is a hard failure; any partial clip must be repaired or handled by a predeclared,
+   reported exclusion rule. Ground-truth-guided recentering is never a remedy.
+5. `nnunet2nndet` → nnDetection task layout. **The task's own geometry (step 2) is the raw input
    — do not hand-plan spacing/patch size a second time.** Run `nndet_prep Task2201_PICAI_csPCa`;
    let its planner derive spacing and patch size, and record the resolved plan values (not your
    input geometry) in the dataset manifest.
-5. `prepare_picai install-splits` writes the official folds to `preprocessed/splits_final.pkl`.
-6. `gcalf_data.sanity_checks --report-path docs/data_report.md`.
+   Record the planner's resolved `nonCT` normalization, target spacing, patch size, level count,
+   per-level strides/kernels/channels, and decoder inputs. **Assert, do not merely record**, that
+   `len(conv_kernels) == 5`: the count is planner-derived from patch size and spacing
+   (`nndet/planning/architecture/boxes/c002.py:196-204`). If it resolves to six, stop and resolve it
+   once at the planning level — adjust the raw-task geometry or pin `conv_kernels`/`strides` in the
+   plan, record which in the manifest, and use that plan for all four arms. Never patch it per run.
+   Note also that `nndet_prep` runs `crop_to_nonzero` (`nndet/io/crop.py:288`) first, so the padded
+   raw-task array is not what the planner sees.
+6. `prepare_picai install-splits` writes the official folds to `preprocessed/splits_final.pkl`.
+7. `gcalf_data.sanity_checks --report-path docs/data_report.md`.
+
+### 1.2.1 Crop-QC evidence and required disposition
+
+**Commit the audit as code.** These numbers currently live only in prose, and `docs/data_report.md`
+is regenerated by `gcalf_data.sanity_checks`, which would wipe them. Add
+`gcalf_data/audit_crop_retention.py` plus its CSV output, and have `sanity_checks` emit the
+exception table into the generated report. Until that exists, treat every figure below as a
+recorded observation that no one can re-derive — which is exactly the state AGENTS.md §0.3/§4
+forbids for anything gating a milestone.
+
+The 2026-09-05 read-only audit used the actual 1,500 T2W scans, Bosma22b glands, 220 non-empty
+`human_expert/resampled` masks, and 205 Pooch25 masks. All Bosma22b gland masks were non-empty.
+**It was run under the superseded 256-voxel crop rule.** 421/425 positive masks were fully
+retained; three were partially clipped (`11174_1001197`: 40/32,365 voxels; `11280_1001303`:
+58/6,406; `10956_1000975`: 469/107,178), and `11050_1001070` lost all 3,472 lesion voxels —
+Guerbet23 lost it too. No additional depth clipping was observed among the 424 lesions that
+survived the in-plane crop.
+
+All four exceptions are fine-spacing scans, and none is at 0.5 mm or coarser:
+
+| Case | In-plane spacing | FOV at 256 voxels | Outcome |
+|---|---|---|---|
+| `11280_1001303` | 0.234 mm | 60.0 mm | partial clip |
+| `11050_1001070` | 0.281 mm | 72.0 mm | total loss |
+| `10956_1000975` | 0.300 mm | 76.8 mm | partial clip |
+| `11174_1001197` | 0.342 mm | 87.6 mm | partial clip |
+| *modal case* | 0.500 mm | 128.0 mm | retained |
+
+So they are a consequence of the crop rule, not four independent data defects. **Re-run the audit
+under the 128 mm FOV before M1 closes** and report the result; the expectation is that the three
+partial clips resolve. `11050_1001070` resolves only if its lesion lies within 64 mm of the gland
+centroid — if it does not, that case is a genuine gland/lesion provenance conflict and D6 item 7's
+predeclared exclusion rule disposes of it. Do not encode any known lesion location into
+preprocessing to rescue a case.
 
 ## 1.3 Definition of done
 
@@ -87,7 +145,19 @@ This audit requires SimpleITK/numpy connected-component labeling (`scipy.ndimage
   contains at least one grade-supervised lesion of every grade 2–5.
 - **L:** `docs/data_report.md` is regenerated from a real run and states the final
   grade-supervised lesion count per grade (§1.1's audit result), the case-level `case_ISUP`
-  distribution, and this phase's cohort limitations (below).
+  distribution, this phase's cohort limitations (below), gland-mask QC, and the full crop-retention
+  audit with the disposition of all four known exceptions.
+- **L:** crop-centre calculation accepts no lesion annotation; train/validation/inference use the
+  same gland/T2W-only resolver; saved spatial transforms can map predictions back to native space.
+- **L:** raw inputs are not already z-scored; the resolved plan uses one `nonCT` normalization
+  pass, and the resolved `use_mask_for_norm` value is recorded (the raw task's zero padding decides
+  it — `nndet/planning/experiment/base.py:287-312`).
+- **L:** the resolved model plan contains exactly five encoder outputs and five decoder inputs, by
+  assertion rather than observation. Record the raw-task geometry *and* the planner's resolved
+  patch size separately — the raw geometry is not the model input, since `crop_to_nonzero`,
+  planner resampling, and patch extraction all sit in between.
+- **L:** `gcalf_data/audit_crop_retention.py` is committed, run, and its output referenced by the
+  generated data report.
 - Sanity checks and planner assertions all pass.
 
 ## 1.4 Cohort limitations (record in the generated data report, not silently)
@@ -100,3 +170,6 @@ This audit requires SimpleITK/numpy connected-component labeling (`scipy.ndimage
 - The multi-component, multi-lesion Pooch25 cases that the audit could not resolve remain
   detection-positive but grade-unsupervised. Do not revisit this rule under schedule pressure —
   it is the boundary between recovered-and-defensible and inferred-and-not.
+- A prostate-centred crop can expose gland/lesion provenance disagreements; it cannot defensibly
+  resolve them using the target mask. Report repairs and exclusions, including their fold, before
+  training and apply the same frozen case set to all four ablation arms.

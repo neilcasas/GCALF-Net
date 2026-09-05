@@ -13,6 +13,8 @@ comparison tables and figures answering SOPs 1–3.
 - [ ] **V:** Shapiro-Wilk → ANOVA/Tukey or Friedman/Bonferroni-Wilcoxon: GCALF-full vs baseline,
       p-value reported (SOP 3).
 - [ ] **V:** patient-level paired bootstrap CIs and effect sizes for every pairwise comparison.
+- [ ] **V:** preprocessing and crop-QC hashes match across arms; validation/test crop centres were
+      computed without lesion annotations; repairs/exclusions are reported once for the shared cohort.
 - [ ] Comparison table + confusion-matrix figures + FROC curves exported.
 
 ---
@@ -26,6 +28,9 @@ comparison tables and figures answering SOPs 1–3.
   endpoint. This is free once detection works and uses the full 1,500-case cohort, unlike every
   grade metric below.
 - Answers "does it find clinically significant disease" for every config, independent of grading.
+- Report the number and disposition of gland-mask/crop-QC exceptions. The case set must be frozen
+  before training and identical across all four configurations; do not drop a difficult case from
+  only one arm.
 
 ## 6.2 Grade classification (grade-supervised lesions only — the thesis headline)
 
@@ -85,6 +90,8 @@ caf_only → CAF's contribution; baseline vs. gcalf_full → combined.
 - Case-level AUROC comparison (all four configs, full 1,500-case cohort).
 - Master comparison table as CSV + rendered PNG/LaTeX.
 - Bootstrap CI plot per comparison (§6.5.2).
+- Crop-QC table: full/partial/failed retention, repaired or excluded cases, and confirmation that
+  lesion masks were audit-only and never crop selectors.
 - All written under `gcalf_experiments/_results/`.
 
 ## 6.7 Compute note (cloud)

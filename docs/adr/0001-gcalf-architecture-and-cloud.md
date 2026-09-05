@@ -6,7 +6,7 @@
 
 The existing plan mixed incompatible definitions of GCALF-Net. It called TransFuse BiFusion cross-attention even though BiFusion has no Q/K/V attention; proposed a frequency-invariant per-channel scalar as a learnable frequency filter; described configuration through the nnDetection plan even though the released model passes encoder options through Hydra `model_cfg.encoder_kwargs`; and treated cloud execution as a list of providers rather than a recoverable workflow.
 
-The released PDHD-Net is an nnDetection fork that performs lesion detection, per-lesion classification, and segmentation. Its encoder applies wavelet enhancement at stages `[1,3,4]` and CNN/Swin fusion at stages `[2,5]`.
+The released PDHD-Net is an nnDetection fork that performs lesion detection, per-lesion classification, and segmentation. Its encoder applies wavelet enhancement at stages `[1,3,4]` and CNN/Swin fusion at stages `[2,5]`. This sentence describes released-code archaeology only; ADR 0002 supersedes it for the study model with a fixed five-level FDSF/WAF contract.
 
 ## Decisions
 
@@ -28,7 +28,7 @@ The released PDHD-Net is an nnDetection fork that performs lesion detection, per
 - The thesis can accurately claim learnable frequency-selective filtering and cross-attention.
 - Window helpers, interpolation behavior, memory profiling, and recovery tests become required engineering work.
 - The required experiment contains 20 primary training runs before optional repeated seeds.
-- Stage-2 CAF may require smaller windows, activation checkpointing, or a reported stage-5-only architecture.
+- CAF may require smaller windows, activation checkpointing, or a predeclared reduced fusion-level subset applied identically to WAF and CAF; ADR 0002 prohibits a CAF-only fallback.
 - A BiFusion result cannot be reported as GCALF CAF without changing the method name and thesis claim.
 - Dependency modernization is deferred and must be evaluated separately after the thesis comparison.
 
@@ -59,4 +59,4 @@ Also recorded: the working repository is now `GCALF-Net/`, a copy of `PDHD-Net/`
 
 ## Review Triggers
 
-Revisit this ADR only if the released encoder cannot train end-to-end, the pinned runtime cannot run on available GPU infrastructure, or measured windowed CAF cannot fit even at stage 5. Any revision must update the method claim, configs, experiment matrix, and all affected documentation together.
+Revisit this ADR only if the released encoder cannot train end-to-end, the pinned runtime cannot run on available GPU infrastructure, or measured windowed WAF/CAF cannot fit at the five-level contract's shared fusion locations. Any revision must update the method claim, configs, experiment matrix, and all affected documentation together.

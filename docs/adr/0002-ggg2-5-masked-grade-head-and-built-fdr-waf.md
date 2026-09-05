@@ -1,4 +1,4 @@
-# ADR 0002: GGG2–5 Lesion-Level Protocol, Masked Grade Head, and a Built (Not Released) FDR/WAF Baseline
+# ADR 0002: GGG2–5 Lesion-Level Protocol, Masked Grade Head, and a Built (Not Released) FDSF/WAF Baseline
 
 **Status:** Accepted | **Date:** 2026-09-05 | **Source:** `/grilling` session, code-verified against both `PDHD-Net/` and `GCALF-Net/`
 
@@ -77,35 +77,57 @@ components or multiple marksheet lesions) are **not** touched by this rule and s
 grade-unsupervised. Report the recovered count per grade before deciding between the plain
 4-class endpoint and a pre-registered GGG4+5 merged secondary analysis (see D8).
 
-### D4 — Build FDR (fixed) + wire WAF as the frozen control; LFF and CAF are single-variable changes on top of it
+### D4 — Build input-level FDSF (fixed) + wire WAF as the frozen control; LFF and CAF are single-variable changes on top of it
 
 Amends ADR 0001's implicit assumption (and `SPEC.md §0`'s "two `ModuleList` slots" framing) that
-FDR/WAF already exist. They do not, in either repository. The frozen baseline is:
+FDSF/WAF already exist. They do not, in either repository. The frozen baseline is:
 
-- **FDR**: `fftn` → `fftshift` → fixed radial low-pass mask at `|f| ≤ 0.15` → complementary
-  `X_low = M·X`, `X_high = (1-M)·X` → `ifftshift` → `ifftn`, replacing `WaveletSpatialFusion` at
-  stages `[1,3,4]`.
+- **FDSF**: once on the three-channel input, `fftn` → `fftshift` → fixed radial low-pass mask at
+  `|f| ≤ 0.15` → complementary `X_low = M·X`, `X_high = (1-M)·X` → `ifftshift` → `ifftn`; low
+  frequencies feed Swin and high frequencies feed CNN before the five-level encoder begins.
 - **WAF**: `WindowAttentionFusion` (already written, dead code in the released repo) instantiated
-  and wired at stages `[2,5]`, replacing `MemoryEfficientFusion`.
+  at the corresponding CNN/Swin feature levels of the fixed five-level encoder, replacing
+  `MemoryEfficientFusion`.
 
-This makes LFF (`§`, Phase 3) exactly FDR with a learned mask — one variable — and CAF (Phase 4)
+This makes LFF (Phase 3) exactly FDSF with a learned response in the same input slot — one
+variable. LFF therefore **returns the same `(x_low, x_high)` pair** and, initialized as
+`H = M_fixed + delta_H` with `delta_H = 0`, *is* FDSF at step 0; a single-output filter would leave
+`lff_only` with no shunting and make it a different pipeline rather than a swap. CAF (Phase 4) is
 exactly WAF with true bidirectional Q/K/V — one variable. The reported "baseline PDHD-Net" is
 therefore the paper's architecture, adapted to 3-channel bpMRI, not the authors' released
 `WaveletSpatialFusion`/`ChannelWiseLightFusion` code. State this plainly in the thesis methods
-section; if FDR+WAF underperforms the released wavelet/channel-light code, report that finding
+section; if FDSF+WAF underperforms the released wavelet/channel-light code, report that finding
 rather than switching baselines after the fact.
 
-### D5 — Fusion at stages 2 and 5 only, identical across all four arms
+### D5 — Exactly five encoder levels, enforced; fusion locations profiled at M2 then frozen, matched across all four arms
 
-Confirmed, not changed: matches the currently wired stages, avoids near-full-resolution 3D
-cross-attention (the primary OOM risk per `SPEC.md §14`/ADR 0001 consequence 4), and adds the
-fewest parameters to a model whose grade head is trained on 220–340 lesions. "Every corresponding
-scale" in the phase docs means every scale that carries fusion, i.e. 2 and 5 — not all six
-encoder stages. Fix the standing defect where `modular.py:158-165` constructs a fusion module for
-every stage but invokes only 2 and 5 (dead parameters in every checkpoint) as part of the FDR/WAF
-build in Phase 2.
+This study uses exactly five encoder feature levels, numbered `0..4`; the decoder consumes all
+five. Five is a **study decision**, not a property derived from the paper — it is the count BiFPN
+actually supports without discarding an input (`BiFPN.py:224-225` unpacks `p3..p7, _`), and no
+level count is cited from Wang et al. (2025) anywhere in this doc set. Describe it that way in the
+thesis.
 
-### D6 — Preprocessing: N4 on T2W only; common grid; center-crop 640→256; fixed 3.0 mm slice spacing, pad/crop to 32; nnDetection plans on top
+**Enforcement.** The level count is planner-derived — `modular.py:63` takes it from
+`len(conv_kernels)`, which `nndet/planning/architecture/boxes/c002.py:196-204` computes from patch
+size and spacing — so "record five levels" is not a mechanism. `Encoder.__init__` asserts
+`len(conv_kernels) == gcalf_cfg.num_levels` and fails loudly otherwise. If `nndet_prep` resolves
+six levels for the frozen preprocessing geometry, that is a **planning event to resolve once and
+record in the dataset manifest** (adjust the raw-task geometry, or pin `conv_kernels`/`strides` in
+the plan), not a per-run override and not something to discover mid-matrix. Whatever resolves must
+be identical for all four arms.
+
+**Fusion locations are measured before they are frozen.** `[0,1,2,3,4]` is the paper-faithful
+starting point, not a settled value. Level 0 carries no stride (`modular.py:120`), so fusing
+there is windowed attention on the full-resolution feature map plus a trilinear upsample of the
+Swin feature to match (`modular.py:195-198`). Near-full-resolution 3D attention is ADR 0001's
+consequence 4 and remains the primary OOM risk in this design; superseding the old "stages 2 and 5
+only" rule removes the *conclusion*, not the constraint. M2's V gate profiles every level at the
+planner's resolved patch size **before any comparative fold is trained**, and that measurement
+selects the frozen subset. Once frozen: identical for WAF and CAF in every arm, never revisited
+after results are known, never containing an out-of-range level, never applied to one module only.
+Construct fusion modules solely at the resolved locations so checkpoints carry no dead parameters.
+
+### D6 — Preprocessing: inference-safe prostate-centred crop at a fixed physical FOV; fixed 3.0 mm slice spacing and depth 32; nnDetection normalizes once
 
 Supersedes the isotropic-1mm-then-crop-to-32 contract implied by the earlier `ROADMAP.md` T2 (that
 contract truncates a ~50 mm gland to 32 mm of coverage after 1 mm resampling — a real defect
@@ -114,27 +136,67 @@ caught by the now-deleted `FEASIBILITY_REPORT.md §10.2`). The adopted contract:
 1. **N4 bias correction on T2W only.** ADC is a quantitative diffusion map; N4 (built for
    receive-coil intensity bias in structural MRI) distorts its physical values. HBV is derived
    from the same acquisition as ADC and is treated the same way.
-2. Resample T2W/ADC/HBV onto a **common reference grid** before any cropping — they ship at
-   different native resolutions (T2W ~0.5 mm in-plane / ~640×640; ADC/HBV coarser) and "crop to
-   256×256" is meaningless until they share a grid.
-3. **In-plane: center-crop** (not resample) 640→256 around the prostate, using the whole-gland
-   mask (`picai_labels/anatomical_delineations/whole_gland/`, present for all 1,500 cases) to
-   center the crop. This preserves native ~0.5 mm in-plane detail instead of inventing or
-   destroying it.
-4. **Slice axis: resample to a fixed 3.0 mm spacing** (near-native for PI-CAI T2W, invents
-   minimal through-plane detail), then pad/crop to 32 slices = 96 mm of coverage — comfortably
-   more than a ~50 mm gland, and physically comparable across patients (unlike interpolating
-   every patient's varying native slice count to a fixed count of 32, which gives every patient a
-   different effective mm/slice and makes lesion extent in voxels incomparable across patients).
-5. Per-case, per-modality z-score normalization, after steps 1–4.
+2. Resample T2W/ADC/HBV onto a **single common reference grid** before any cropping — they ship at
+   different native resolutions (T2W ~0.5 mm in-plane; ADC/HBV coarser) and a prostate-centred crop
+   is meaningless until they share a grid. That grid is the corrected T2W's native in-plane
+   geometry at **3.0 mm along the slice axis**, so the slice-spacing decision in item 5 costs
+   ADC/HBV one interpolation rather than two. Use **linear** interpolation for images, not
+   cubic/B-spline: B-spline overshoots at edges and can emit out-of-range or negative values on
+   ADC — the same quantitative-map argument that keeps ADC out of N4 in item 1.
+3. **In-plane: center-crop** (not resample) around the prostate at a **fixed 128 mm physical field
+   of view**, deriving the centre only from the resampled whole-gland mask. Specify the crop in
+   millimetres, not voxels: measured over a 600-case sample, PI-CAI T2W in-plane spacing runs
+   0.234–0.625 mm (modes 0.500 mm and 0.300 mm), so a fixed 256-voxel window would span 60 mm of
+   anatomy on one scanner and 160 mm on another — precisely the incomparability item 5 rejects on
+   the slice axis. The voxel extent therefore varies per case; `nndet_prep` resamples in-plane to
+   the planner's target spacing regardless. Validate the gland first; an empty or implausible gland
+   uses the predeclared T2W geometric-centre fallback and is reported.
+4. **Never use the lesion annotation to choose a crop.** It is unavailable at inference. Union-
+   and lesion-centred fallbacks are target leakage when applied to validation/test cases. The
+   lesion mask is used only after cropping to audit retention.
+5. **Slice axis: fixed 3.0 mm spacing** (near-native for PI-CAI T2W, invents minimal through-plane
+   detail — applied once, in item 2's reference grid), then pad/crop to 32 slices = 96 mm of
+   coverage about the geometric centre — comfortably more than a ~50 mm gland, and physically
+   comparable across patients (unlike interpolating every patient's varying native slice count to a
+   fixed count of 32, which gives every patient a different effective mm/slice and makes lesion
+   extent in voxels incomparable across patients). Pad with zeros; item 8 explains why the value
+   matters.
 6. **Masks always nearest-neighbour interpolation, never linear** — linear interpolation on
    `{0,2,3,4,5}`-valued masks produces non-integer values that silently fabricate nonexistent
    grade classes.
-7. This geometry is the **raw nnDetection task input**, not a hand-planned final patch. Let
-   `nndet_prep`'s planner choose target spacing and patch size from the data, as it is designed
-   to and as `picai_baseline/nndetection_baseline.md`'s tested recipe assumes. Record the
-   resolved plan values in the dataset manifest; do not fight the planner with a second, hidden
-   resampling step.
+7. Run exhaustive QC over all positive masks: record pre/post voxel and connected-component
+   counts separately for in-plane and depth operations. **The exclusion rule, predeclared here:** a
+   positive case is excluded from all four arms if the gland-centred 128 mm crop retains no lesion
+   voxel for a grade-supervised lesion; partial clipping is retained and reported. Never
+   target-guided recentering, and never a rule written after the audit reports its numbers.
+8. This geometry is the **raw nnDetection task input**, not a hand-planned final patch, and **not
+   the model input**: `nndet_prep` runs `crop_to_nonzero` (`nndet/io/crop.py:288`) — which trims
+   item 5's zero padding straight back off, per case — then resamples to the planner's target
+   spacing, then training extracts patches. Let the planner choose target spacing and patch size
+   from the data, as it is designed to and as `picai_baseline/nndetection_baseline.md`'s tested
+   recipe assumes. Record the resolved plan values in the dataset manifest; do not fight the
+   planner with a second, hidden resampling step. Do not z-score in the raw builder: nnDetection
+   identifies T2W/ADC/HBV as `nonCT` and normalizes per case and per modality after its planned
+   resampling. The padding value feeds that decision —
+   `determine_whether_to_use_mask_for_norm` (`nndet/planning/experiment/base.py:287-312`) uses the
+   nonzero mask only when the median `crop_to_nonzero` size reduction is `< 3/4` — so record the
+   resolved scheme alongside the plan and confirm preprocessing contains exactly one normalization
+   pass.
+
+**The gland mask is a deployment dependency, not just a training input.** The crop centre comes
+from Bosma22b (`gcalf_data/prepare_picai.py:26` — the PI-CAI maintainers' own AI segmentation),
+which does not exist for an unseen case, so "identical at deployment" requires shipping a
+prostate-gland segmenter. `docs/CLOUD_DEPLOYMENT_PLAN.md` carries it as such. Item 3's fallback
+covers an *empty* gland mask, not a *wrong* one.
+
+The direct 2026-09-05 audit — run under the superseded 256-voxel rule — found 1,500/1,500 Bosma22b
+gland masks non-empty, fully retained 421/425 positive masks, partially clipped three, and
+completely removed `11050_1001070` (Guerbet23 also failed there). Every one of those four cases has
+fine in-plane spacing (0.234–0.342 mm, i.e. a 60–88 mm window where the modal case got 128 mm), so
+they are a consequence of specifying the crop in voxels rather than four independent data defects
+— see `ARCHITECTURE.md §3`. **They have not been re-measured under the 128 mm rule.** The re-audit
+(`gcalf_data/audit_crop_retention.py`, Phase 1) reports before M1 closes, and item 7's exclusion
+rule — already fixed above — disposes of whatever survives it.
 
 ### D7 — Statistics: keep the defended normality-gated test as primary, add patient-level paired bootstrap CIs
 
@@ -200,7 +262,7 @@ license to skip the pilot.
 - The grade head, its loss routing, and its masking logic are new model code with no prior
   implementation in either repository (unlike LFF/CAF, which at least have GFNet/DCA/UCTransNet
   references to adapt).
-- FDR and WAF are also new code (D4); the integration surface is larger than ADR 0001 assumed.
+- FDSF and WAF are also new code (D4); the integration surface is larger than ADR 0001 assumed.
 - Every downstream evaluation artifact (confusion matrix, FROC, Grad-CAM target) must report the
   detection denominator (1,500 cases) and the grade-matched denominator (220–340 lesions)
   side by side, never collapse them into one accuracy number.
@@ -212,7 +274,11 @@ license to skip the pilot.
 | Native `classifier_classes = 4` (foreground-only GGG2–5 instances) | Forces dropping all 205 Pooch25 positives from detection training; no grade to assign an ungraded lesion. |
 | Case-level GGG1–5 head | Reverses the approved GGG2–5 lesion-level amendment; discards the 178 marksheet cases with genuinely mixed-grade multifocal disease. |
 | Keep released wavelet + channel-light as "the baseline" | Leaves the defended hypotheses (naming FDSF's fixed spherical mask and window-based self-attention) literally false; makes each ablation change two things at once (mechanism family and learnability). |
-| Fusion at all six encoder stages | Matches phase-doc prose literally but is the main OOM risk in 3D and adds parameters a 220–340-lesion grade head cannot support. |
+| A dynamic five-or-six-level encoder | Breaks the agreed five-level contract and can silently invalidate fusion indices or discard a decoder input. |
+| Freezing `fusion_levels` at all five without profiling first | Reinstates the near-full-resolution 3D attention that ADR 0001 consequence 4 flagged as the primary OOM risk, and makes the fallback a post-hoc choice. Profile at M2, then freeze (D5). |
+| A learnable frequency filter that returns one tensor | FDSF returns `(x_low, x_high)`; a single-output LFF has no shunting, so `lff_only` would be a different pipeline rather than a one-variable swap (D4). |
+| Lesion-guided union/lesion-only crop | Uses ground truth unavailable at inference and leaks target location into validation preprocessing. |
+| Double z-score normalization | Creates an ambiguous pipeline and transforms zero padding before nnDetection applies its own `nonCT` normalization. |
 | 1 mm isotropic resampling + depth-32 crop | Truncates a ~50 mm gland to 32 mm of coverage; caught by measurement, not assumption. |
 | Patient-level paired bootstrap as the sole/primary statistical test | Requires a protocol amendment beyond what was approved this session; kept as a secondary report alongside the defended test instead (D7). |
 | GGG4+5 merge as the primary endpoint | A third protocol amendment; abandons the GGG4-vs-GGG5 distinction without exhausting the recovery audit (D3) first. |
@@ -221,7 +287,7 @@ license to skip the pilot.
 
 Revisit this ADR if: the D3 unifocal audit recovers materially fewer lesions than expected and
 the 4-class endpoint becomes non-viable even with CIs; the masked grade head cannot be trained
-end-to-end after a real implementation attempt; FDR+WAF cannot be made to converge as a control
+end-to-end after a real implementation attempt; FDSF+WAF cannot be made to converge as a control
 (forcing a return to the released wavelet+channel-light baseline, per ADR 0001's rejected
 alternative reconsidered); or the fold-0 pilot forces a ladder step-down inconsistent with D10's
 planned rung. Any revision must update this ADR, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, the

@@ -9,6 +9,8 @@ urologists, PI-RADS v2, 5-point Likert, 30 cases stratified across GGG2–5).
 - [ ] **L:** `medcam.inject` produces a 3D CAM of input spatial shape on a synthetic test case.
 - [ ] **L:** CAM changes with target grade (not constant across classes).
 - [ ] **V:** CAM localizes to the lesion for known real positives.
+- [ ] **L:** saved registration/crop/resampling/padding metadata maps the CAM back to native T2W
+      coordinates without using the ground-truth lesion transform.
 - [ ] **V:** blinded per-case review packets exported for the urologists.
 
 **Start recruiting the three urologists now, not at this phase.** They are the only dependency
@@ -55,7 +57,8 @@ classifier-fallback model is needed for this study.
 
 ## 7.4 Rendering for clinical review (`gcalf_eval/gradcam.py` = thin medcam wrapper)
 
-- **NIfTI:** re-header medcam's CAM into the input's affine/spacing → overlay in any NIfTI/DICOM viewer.
+- **NIfTI:** invert the recorded depth padding/crop, z resampling, gland-centred in-plane crop, and
+  T2W-grid transform before assigning native T2W geometry. Re-headering alone is insufficient.
 - **PNG panels:** axial slice through the lesion centroid; T2W grayscale + jet CAM at α=0.4; repeat
   for ADC and HBV.
 - **Blinded packet (SOP 4):** per case, one panel image + predicted grade, **no GT/prediction
@@ -78,6 +81,8 @@ silently rebalancing.
 - CAM argmax roughly inside the lesion mask for a known strong positive (or `evaluate` overlap > chance);
 - **non-destructive:** injected model's forward output equals the un-injected model's output
   (medcam only hooks — verify this holds with the two-head model, not just the detection path).
+- a synthetic landmark survives native→preprocessed→native coordinate round-trip within the
+  declared interpolation tolerance.
 
 ## 7.7 Risks & fallbacks
 

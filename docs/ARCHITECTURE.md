@@ -19,16 +19,16 @@ contains an FFT-based frequency module or a wired window-attention fusion.
 
 | Thesis/paper says | Code actually has | Consequence |
 |---|---|---|
-| FDR: 3D FFT + fixed spherical low/high mask | `nndet/arch/encoder/WaveletFusion.py::WaveletSpatialFusion` — Haar **wavelet**, not FFT. `torch.fft`/`fftshift`/`rfftn` appear nowhere in `nndet/`. `modular.py:172` comments `移除FFT频域处理` ("FFT frequency-domain processing removed"); `fft_low_ratio` at `modular.py:62` is a dead parameter. | **FDR must be built.** This is not a config flag away — it is new code (§5). |
+| FDSF: input-level 3D FFT + fixed spherical low/high mask and branch shunting | `nndet/arch/encoder/WaveletFusion.py::WaveletSpatialFusion` — Haar **wavelet**, not FFT. `torch.fft`/`fftshift`/`rfftn` appear nowhere in `nndet/`. `modular.py:172` comments `移除FFT频域处理` ("FFT frequency-domain processing removed"); `fft_low_ratio` at `modular.py:62` is a dead parameter. | **FDSF must be built.** This is not a config flag away — it is new code (§5). |
 | WAF: window self-attention fusion | `nndet/arch/encoder/window_attention_fusion.py::WindowAttentionFusion` exists, fully written, and is **imported at `modular.py:11` but never instantiated**. Live fusion is `MemoryEfficientFusion`→`ChannelWiseLightFusion` (ECA-style channel attention + grouped conv), stages `[2,5]` only. | **WAF must be wired.** The class exists; it just needs to replace `ChannelWiseLightFusion` in the module list. |
 | 5-class GGG1–5 lesion grading | PI-CAI's expert masks encode ISUP ≤1 as background (value 0), indistinguishable from benign tissue. Only 220 of 1,500 cases carry graded spatial masks (`{2,3,4,5}`); the other 205 positive cases (`Pooch25`) and all 1,500 `Bosma22a` AI masks are binary `{0,1}`. | **GGG2–5 is the ceiling, not a simplification** (ADR 0002 D1). A GGG1 class cannot be built from this data without inventing labels. |
 | One classifier head over `classifier_classes` foreground grades | Native instance classes would require dropping every ungraded positive lesion (all 205 Pooch25 cases) — no class to assign them. | **Two-head design**: one detection foreground class (`csPCa`, all 425 positives + 1,075 negatives) plus a separate 4-logit grade head trained only on grade-resolved lesions (ADR 0002 D2). |
-| Fusion "at every corresponding scale" | Live fusion wiring is stages `[2,5]` of 6; `modular.py:158-165` constructs a fusion module for **every** stage but invokes only 2 and 5 — four modules of dead parameters in every checkpoint. | Fusion stays at `[2,5]` (ADR 0002 D5); fix the dead-parameter construction while building FDR/WAF. |
+| Five paper encoder levels and WAF at corresponding scales | Level count is planner-derived (`modular.py:63`; `c002.py:196-204`) and can be five or six. `modular.py:192` fuses at `[2,5]`, while `BiFPN.py:224-225` unpacks `p3..p7, _` — it **drops the sixth input**. So on a six-level plan the stage-5 fusion output is exactly the one the decoder throws away, and the only wired fusion that reaches the head is stage 2; on a five-level plan stage 5 never executes at all. | Freeze the level count; make WAF/CAF locations valid and identical; require every encoder output to reach BiFPN (ADR 0002 D5). |
 | 1000-epoch training | `nndet/conf/train/v001.yaml`: `max_num_epochs: 50`, `num_train_batches_per_epoch: 2500`, `swa_epochs: 10`. No `EarlyStopping` exists or may be added. | ≈150k optimizer steps per run fixes the compute budget (§9). |
 
 **Bottom line.** The integration surface is larger than a naive reading of the paper suggests:
-FDR (new), WAF (wire existing), a grade head (new, no upstream reference), LFF (new, built on
-FDR), CAF (new, built on WAF). Budget for five new modules, not two `ModuleList` swaps.
+FDSF (new), WAF (wire existing), a grade head (new, no upstream reference), LFF (new, built on
+FDSF), CAF (new, built on WAF). Budget for five new modules, not two `ModuleList` swaps.
 
 ---
 
@@ -61,9 +61,9 @@ GCALF-Net/
 ├── nndet/arch/encoder/
 │   ├── modular.py                     # the ONE integration file
 │   ├── gcalf/
-│   │   ├── fdr.py                     # NEW: fixed FFT frequency decomposition
+│   │   ├── fdsf.py                    # NEW: input-level fixed FFT separation and shunting
 │   │   ├── waf.py                     # wires the existing WindowAttentionFusion
-│   │   ├── lff.py                     # NEW: FDR + learned mask
+│   │   ├── lff.py                     # NEW: FDSF fixed response replaced by learned response
 │   │   ├── caf.py                     # NEW: WAF + true bidirectional Q/K/V
 │   │   ├── grade_head.py              # NEW: masked 4-logit GGG2-5 head
 │   │   └── registry.py                # build_frequency_module(...), build_fusion_module(...)
@@ -109,7 +109,7 @@ would discard. This is why the prediction unit is the lesion, not the case.
 
 | Group | n | Detection role | Segmentation | Grade head |
 |---|---|---|---|---|
-| Benign (ISUP 0) + GGG1 (ISUP 1) | 1,075 + 228 | negative | negative | masked out |
+| Benign (ISUP 0) + GGG1 (ISUP 1) | 847 + 228 = 1,075 | negative | negative | masked out |
 | Positive, graded (`human_expert`) | 220 (+ audit recovery, §Phase 1) | positive | positive | **trained** |
 | Positive, binary only (`Pooch25`) | 205 | positive | positive | masked out |
 
@@ -128,18 +128,79 @@ would discard. This is why the prediction unit is the lesion, not the case.
 `classifier_classes = 1` for nnDetection's own anchor head. Grade is carried as instance metadata,
 consumed only by the separate grade head (§4.3), never by the planner.
 
-**Preprocessing** (ADR 0002 D6 — nearest-neighbour for every mask, never linear):
+**Preprocessing** (ADR 0002 D6 — identical at training, validation, test, and deployment):
 
-1. N4 bias correction on **T2W only** (ADC/HBV are quantitative maps; N4 distorts their values).
-2. Resample T2W/ADC/HBV onto a common reference grid (they ship at different native resolutions).
-3. In-plane: **center-crop** 640→256 around the prostate, centered using the whole-gland mask
-   (`anatomical_delineations/whole_gland/`, present for all 1,500 cases). No in-plane resampling —
-   this preserves native ~0.5 mm detail.
-4. Slice axis: resample to a **fixed 3.0 mm spacing**, then pad/crop to 32 slices (96 mm coverage).
-   Fixed spacing, not fixed slice count, keeps lesion extent in voxels comparable across patients.
-5. Per-case, per-modality z-score normalization.
-6. Emit as the nnDetection **raw** task; let `nndet_prep`'s planner choose target spacing and patch
-   size on top (do not hand-plan a second time — follow `picai_baseline/nndetection_baseline.md`).
+1. N4 bias correction on **T2W only**. ADC is quantitative; HBV is a diffusion-weighted magnitude
+   or derived image, not a quantitative map in the same sense, but both remain outside N4 by
+   protocol.
+2. Build **one** reference grid from the corrected T2W: native in-plane geometry, **3.0 mm along
+   the slice axis**. Resample ADC/HBV onto it with **linear** interpolation and both masks with
+   nearest-neighbour, in a single pass. Never interpolate a mask linearly. Do not use a
+   cubic/B-spline kernel on ADC or HBV — it overshoots at edges and can produce out-of-range or
+   negative values on the same quantitative map step 1 declines to N4. Folding the slice spacing
+   into this grid costs ADC/HBV one interpolation instead of two.
+3. Validate the resampled whole-gland mask, then derive the in-plane crop centre from its centroid.
+   **The crop is a fixed 128 mm physical field of view, not a fixed voxel count** (see the FOV note
+   below), so its voxel extent varies per case. It stays a pure index operation, preserving native
+   T2W in-plane spacing. An empty or implausible gland mask uses a predeclared, target-independent
+   fallback (the T2W geometric centre) and is recorded.
+4. **The lesion mask never selects or changes the crop.** It is unavailable at inference and may
+   be used only after the crop for retention QC. Union- and lesion-centred fallbacks are prohibited.
+5. Pad/crop the slice axis to 32 slices about the **geometric** centre — 96 mm of coverage at the
+   3.0 mm spacing already fixed in step 2. Pad with **zeros**; the value is not cosmetic (step 8).
+   Geometric depth centring remains the adopted rule while the exhaustive positive-case audit shows
+   no additional depth clipping; changing to gland-z centring requires a new full-cohort audit.
+6. For every positive case, record lesion voxels and connected components before and after the
+   in-plane and depth operations. A non-empty lesion becoming empty is a hard QC failure; partial
+   clipping is retained and reported under the predeclared exclusion rule below, never hidden by a
+   label-guided crop.
+7. Emit as the nnDetection **raw** task. **This geometry is not the model input.** `nndet_prep`
+   applies three further transforms: `crop_to_nonzero` (`nndet/io/crop.py:288`) trims the zero
+   padding back off per case, the planner resamples to its own target spacing, and training
+   extracts patches. What the contract guarantees downstream is therefore the 3.0 mm slice spacing
+   (so the planner's target z spacing is 3.0 mm and no second z resample occurs), a gland-centred
+   field of view of constant physical size, and exactly one normalization pass — not a literal
+   fixed-shape array arriving at the network.
+8. **Normalize once:** do not z-score in the raw-task builder. Let nnDetection's `nonCT` scheme
+   perform per-case, per-modality zero-mean/unit-variance normalization after its planned
+   resampling. Step 5's padding value drives which scheme resolves:
+   `determine_whether_to_use_mask_for_norm` (`nndet/planning/experiment/base.py:287-312`) enables
+   the nonzero mask only when the median `crop_to_nonzero` size reduction is `< 3/4`, and that
+   decides whether `normalize_other` z-scores over the nonzero region or the whole volume. Record
+   the resolved scheme, target spacing, and patch size.
+
+**Why a physical FOV and not 256 voxels.** T2W in-plane spacing measured over a 600-case sample of
+the PI-CAI archive runs **0.234–0.625 mm** (modes 0.500 mm, n=273; 0.300 mm, n=166). A fixed
+256-voxel crop therefore spans 60 mm of anatomy on one scanner and 160 mm on another — the same
+defect step 5 avoids on the slice axis by fixing spacing rather than slice count. It is also,
+measurably, what produced every retention exception in the 2026-09-05 audit: all four are
+fine-spacing cases and none is at 0.5 mm or coarser.
+
+| Case | In-plane spacing | FOV under a 256-voxel crop | Retention under that crop |
+|---|---|---|---|
+| `11280_1001303` | 0.234 mm | 60.0 mm | partial clip (58 / 6,406 voxels) |
+| `11050_1001070` | 0.281 mm | 72.0 mm | **all 3,472 lesion voxels lost** |
+| `10956_1000975` | 0.300 mm | 76.8 mm | partial clip (469 / 107,178) |
+| `11174_1001197` | 0.342 mm | 87.6 mm | partial clip (40 / 32,365) |
+| *modal case* | 0.500 mm | 128.0 mm | retained |
+
+At 128 mm every case receives the coverage the modal case already had. That audit also found all
+1,500 Bosma22b gland masks non-empty, and 421/425 positives fully retained. **These per-case counts
+have not been re-measured under the 128 mm rule**; until `gcalf_data/audit_crop_retention.py` is
+committed and run (§Phase 1), read the table as the evidence for the rule change and the counts as
+pending re-audit.
+
+**Predeclared exclusion rule** (fixed now, before the re-audit reports its numbers): a positive
+case is excluded from all four ablation arms if a gland-centred 128 mm crop retains no lesion voxel
+for a grade-supervised lesion. Partial clipping is retained and reported, never repaired by moving
+the crop. Exclusions are frozen into the shared case set and reported once, with their fold.
+
+**The gland mask is a deployment dependency.** The crop centre comes from the Bosma22b whole-gland
+mask (`gcalf_data/prepare_picai.py:26` — the PI-CAI maintainers' own AI segmentation), which does
+not exist for an unseen case. Running this pipeline at inference therefore requires shipping a
+prostate-gland segmenter, and `docs/CLOUD_DEPLOYMENT_PLAN.md` carries it as such. Step 3's fallback
+covers an *empty* gland mask; it does not cover a *wrong* one, and `11050_1001070` is the standing
+example — both Bosma22b and Guerbet23 disagree with the lesion annotation there.
 
 **Splits:** official PI-CAI patient-disjoint 5-fold splits (`picai_baseline`/`Z-SSMNet`), verified
 independently for no patient leakage and every grade present in every held-out fold.
@@ -152,32 +213,46 @@ independently for no patient leakage and every grade present in every held-out f
 model_cfg:
   encoder_kwargs:
     gcalf_cfg:
-      frequency_filter_type: fdr       # fdr | lff
+      frequency_filter_type: fdsf      # fdsf | lff
       fusion_type: waf                 # waf | caf
-      freq_stages: [1, 3, 4]
-      fusion_stages: [2, 5]
-      fdr: {radius: 0.15}
-      lff: {grid_size: [4, 8, 8], groups: 8}
+      num_levels: 5
+      fusion_levels: [0, 1, 2, 3, 4]   # starting point; frozen by M2 profiling
+      fdsf: {radius: 0.15}
+      lff: {grid_size: [4, 8, 8], groups: 1}   # in_channels is 3 at the input; 3 % 8 != 0
       waf: {window_size: [2, 7, 7], num_heads: 4}
       caf: {window_size: [2, 7, 7], num_heads: 4, dropout: 0.0}
 ```
 
 | Config | `frequency_filter_type` | `fusion_type` |
 |---|---|---|
-| Baseline (built FDR+WAF) | `fdr` | `waf` |
+| Baseline (built FDSF+WAF) | `fdsf` | `waf` |
 | LFF only | `lff` | `waf` |
-| CAF only | `fdr` | `caf` |
+| CAF only | `fdsf` | `caf` |
 | Full GCALF-Net | `lff` | `caf` |
 
-One `Encoder` class; `nndet/arch/encoder/gcalf/registry.py` is the only string→module mapping.
+One `Encoder` class; `nndet/arch/encoder/gcalf/registry.py` is the only string→module mapping. The
+encoder emits exactly five feature levels, numbered `0..4`, and the decoder consumes all five.
+Configuration validation rejects any other level count or out-of-range fusion level.
+
+**`fusion_levels` is measured before it is frozen, not assumed.** `[0,1,2,3,4]` is the
+paper-faithful *starting point*, not a settled value: level 0 carries no stride
+(`modular.py:120`; `get_strides()` returns `[1,1,1]`), so fusing there means windowed attention
+over the full-resolution feature map plus a trilinear upsample of the Swin feature to that size
+(`modular.py:195-198`). Near-full-resolution 3D attention was ADR 0001's consequence 4 and the
+primary OOM risk in this design; that constraint is still live and is not answered by declaring a
+default. M2's V gate therefore **profiles every level before any comparative fold is trained**
+(`ROADMAP` M2), and the measurement selects the frozen subset. Judge it at the planner's resolved
+patch size, not at the raw-task volume (§3 step 7). Once frozen, the subset is identical for WAF
+and CAF in every arm and never revisited after seeing model results.
 Same experiment-directory convention as before: `gcalf_experiments/<config>_seed<NN>/` with
 `checkpoints/`, `logs/metrics.csv`, `predictions/`, `config_snapshot.yaml`, `git_commit.txt`.
 
 ---
 
-## 5. FDR (fixed) and the built baseline
+## 5. FDSF (fixed 3D FFT) and the built baseline
 
-**Purpose:** the frozen control. Replaces `WaveletSpatialFusion` at stages `[1,3,4]`.
+**Purpose:** the frozen frequency control. FDSF runs exactly once on the three-channel bpMRI input,
+before both branches of the five-level encoder. It does not replace stage-local wavelet modules.
 
 **Definition:**
 1. `X = fftn(x, dim=(-3,-2,-1))`, then `fftshift` to center frequencies.
@@ -185,8 +260,8 @@ Same experiment-directory convention as before: `gcalf_experiments/<config>_seed
 3. Fixed spherical mask `M = 1[r ≤ 0.15]`.
 4. `X_low = M·X`, `X_high = (1-M)·X`.
 5. `ifftshift` each, then `ifftn` back to spatial domain.
-6. Route `X_low` toward the Swin branch, `X_high` toward the CNN branch (matching the paper's
-   frequency-routing claim — verify against the thesis's exact routing direction before coding).
+6. Route `X_low` toward the Swin branch and `X_high` toward the CNN branch, exactly as specified by
+   the paper. This direction is fixed across all baseline and ablation runs.
 
 Run FFT in fp32 (`torch.cuda.amp.autocast(enabled=False)` around the FFT block, as in GFNet).
 
@@ -200,8 +275,11 @@ for LFF below).
 
 ## 6. Learnable Frequency Filter (LFF)
 
-**Purpose:** replace FDR's fixed mask with one learned, shared, real-valued gain — the *only*
-change from §5, so LFF vs. baseline is a single-variable ablation.
+**Purpose:** replace the input-level FDSF fixed spherical mask with one learned, shared,
+real-valued response at the identical input location, emitting the **same complementary
+`(x_low, x_high)` pair** — the *only* change from §5, so LFF vs. baseline is a single-variable
+ablation. LFF is a learned *separation*, not a filter: matching FDSF's arity is what makes the
+`lff_only` arm a drop-in swap rather than a different pipeline.
 
 **Reference:** `GFNet/gfnet.py::GlobalFilter`, ported 2D→3D.
 
@@ -215,51 +293,71 @@ change from §5, so LFF vs. baseline is a single-variable ablation.
   alias onto the other half and are not identifiable. A real gain is exactly Hermitian, halves the
   parameter count, stays frequency-selective, and needs no orientation correction on the trailing
   rFFT axis (it already runs DC→Nyquist monotonically).
-- Parameterize as `H = 1 + delta_H`, `delta_H` zero-initialized (exact identity at start, no
-  separate spatial residual — an all-ones filter *plus* a residual returns ≈2x, not x).
+- **Parameterize as `H = M_fixed + delta_H`**, where `M_fixed` is §5's spherical mask at
+  `r ≤ 0.15` and `delta_H` is zero-initialized. At init LFF is then *exactly FDSF*, not merely an
+  identity map — a stronger baseline-invariance property than `H = 1 + delta_H` (which would start
+  at `x_low = x, x_high = 0` and starve the CNN branch at step 0), and the reason §5's regression
+  test can be a direct equality check. No separate spatial residual — an all-ones filter *plus* a
+  residual returns ≈2x, not x.
+- **Take the high branch by subtraction**, `x_high = x - x_low`, so complementary reconstruction
+  holds by construction and FDSF's own lossless-split test (`PHASE_2 §2.2`) applies unchanged to
+  both arms.
 
 ```python
 class LearnableFrequencyFilter3D(nn.Module):
-    """Grouped, shape-tolerant, zero-phase, real-valued learnable frequency filter."""
+    """Grouped, shape-tolerant, zero-phase, real-valued learnable frequency separation.
 
-    def __init__(self, in_channels, out_channels, grid_size=(4, 8, 8), groups=8):
+    Same signature and same (x_low, x_high) arity as FDSF. At initialization the
+    learned response *is* FDSF's fixed spherical mask, so the two are numerically
+    identical and the baseline cannot move when the registry gains this branch.
+    """
+
+    def __init__(self, in_channels, radius=0.15, grid_size=(4, 8, 8), groups=1):
         super().__init__()
         if in_channels % groups != 0:
             raise ValueError("in_channels must be divisible by groups")
         self.in_channels = in_channels
         self.groups = groups
+        self.radius = radius
         self.delta_weight = nn.Parameter(torch.zeros(1, groups, *grid_size))  # real, zero-init
-        self.proj = (nn.Identity() if in_channels == out_channels
-                     else nn.Conv3d(in_channels, out_channels, kernel_size=1))
 
     def forward(self, x):
         input_dtype = x.dtype
         with torch.cuda.amp.autocast(enabled=False):
             spectrum = torch.fft.rfftn(x.float(), dim=(-3, -2, -1), norm="ortho")
+            # centered on D,H; monotonic DC->Nyquist on the trailing rFFT axis (§6 bullet 1)
+            base = spherical_mask_rfft(spectrum.shape[-3:], self.radius,
+                                       device=x.device)            # == §5's M
             delta = F.interpolate(self.delta_weight, size=spectrum.shape[-3:],
                                    mode="trilinear", align_corners=True)
-            delta = torch.fft.ifftshift(delta, dim=(-3, -2))  # centered grid -> rfftn ordering
-            gain = (1.0 + delta).repeat_interleave(self.in_channels // self.groups, dim=1)
-            filtered = torch.fft.irfftn(spectrum * gain, s=x.shape[-3:],
-                                         dim=(-3, -2, -1), norm="ortho")
-        return self.proj(filtered.to(input_dtype))
+            gain = (base + delta).repeat_interleave(self.in_channels // self.groups, dim=1)
+            gain = torch.fft.ifftshift(gain, dim=(-3, -2))  # centered grid -> rfftn ordering
+            x_low = torch.fft.irfftn(spectrum * gain, s=x.shape[-3:],
+                                      dim=(-3, -2, -1), norm="ortho")
+        x_low = x_low.to(input_dtype)
+        return x_low, x - x_low          # complementary by construction
 ```
 
-**Unit tests** (`tests/gcalf/test_lff.py`): shape in == shape out across several `(D,H,W)`;
-`delta_weight=0` ⟹ output ≈ input (`atol=1e-4`); gradient reaches `delta_weight`; **orientation
-gate** — a grid that is 1 at centre, −1 elsewhere must pass a constant volume through and suppress
-a Nyquist checkerboard (inverts under a missing `ifftshift` — the single most valuable test in the
-file); finite under autocast on CPU and CUDA; a fixed-seed regression test proving the FDR
-baseline's output is byte-identical after LFF's registry refactor.
+**Unit tests** (`tests/gcalf/test_lff.py`): both outputs keep the input shape across several
+`(D,H,W)`; **`x_low + x_high == x`** to `atol=1e-5` (the same lossless-split assertion FDSF must
+pass); **`delta_weight=0` ⟹ LFF's `(x_low, x_high)` equals FDSF's, not merely `x`** — the
+init-equals-baseline gate; gradient reaches `delta_weight` through *both* returned tensors;
+**orientation gate** — a grid that pushes the response to 1 at centre and −1 elsewhere must pass a
+constant volume into `x_low` and a Nyquist checkerboard into `x_high` (inverts under a missing
+`ifftshift` — the single most valuable test in the file); finite under autocast on CPU and CUDA;
+a fixed-seed regression test proving the FDSF baseline's output is byte-identical after LFF's
+registry refactor.
 
 ---
 
 ## 7. WAF (wired) and Cross-Attention Fusion (CAF)
 
-**WAF** (baseline fusion, stages `[2,5]`): instantiate the existing
+**WAF** (baseline fusion): instantiate the existing
 `nndet/arch/encoder/window_attention_fusion.py::WindowAttentionFusion` in place of
 `MemoryEfficientFusion`. It already implements shifted-window self-attention; the work here is
-wiring, not writing.
+wiring, not writing. It fuses corresponding CNN and Swin features at the frozen `fusion_levels`
+(§4 — starting point `[0,1,2,3,4]`, settled by M2's profiling); the decoder receives all five
+encoder outputs whether or not every level carries a fusion module.
 
 **CAF** (replaces WAF, the second single-variable change): true bidirectional Q/K/V cross-attention
 — CNN windows query Swin keys/values, Swin windows query CNN keys/values — where WAF has
@@ -312,12 +410,14 @@ architecture limitation; the first upgrade if CAF underperforms for reasons othe
 divisible and padded shapes; padding invariance (refilling padded region with a different constant
 leaves the valid region's output unchanged); no NaN from fully-padded windows; residual counted
 once (zero both attention outputs + identity `out_proj` ⟹ output == aligned CNN feature exactly);
-gradients reach both alignment convs and both attention projections; CUDA peak memory at real
-stage-2/stage-5 shapes passes a declared gate.
+gradients reach both alignment convs and both attention projections; CUDA peak memory at all five
+real feature shapes passes a declared gate.
 
-**Fallback ladder** (apply in order, record any architecture change): reduce window to `(2,4,4)`;
-activation checkpointing around CAF; true CAF at stage 5 only; TransFuse BiFusion as a separately
-named fallback experiment. Never silently relabel BiFusion as CAF.
+**Fallback ladder** (walk it against M2's measurements, and freeze the outcome before the four-arm
+comparison): reduce window to `(2,4,4)`; activation checkpointing around both WAF and CAF; drop the
+highest-resolution level(s) from `fusion_levels`, which is where the cost concentrates; TransFuse
+BiFusion as a separately named fallback experiment. Never silently relabel BiFusion as CAF or
+reduce only one ablation arm.
 
 ---
 
@@ -363,7 +463,7 @@ side by side (§10).
   ladder rungs (full matrix → halved batches-per-epoch, all 20 runs → 14-run reduced matrix,
   never dropping folds for only some configs) — **choose before launching, not after seeing
   results.** Planned rung: full matrix, within a $150–350 budget (ADR 0002 D10).
-- **AMP:** everywhere except the FFT block in FDR/LFF (`autocast(enabled=False)` around it).
+- **AMP:** everywhere except the FFT block in FDSF/LFF (`autocast(enabled=False)` around it).
 - **Reproducibility:** fixed seed; snapshot `config.yaml`, `git rev-parse HEAD`, `pip freeze`,
   dataset-manifest SHA-256, and split-file SHA-256 into every `gcalf_experiments/<exp>/`.
   Preserve out-of-fold predictions for every run (needed for §10's paired bootstrap CIs).
@@ -422,7 +522,7 @@ GGG2–5-stratified, 3-urologist PI-RADS v2 Likert review.
 **Why CPU-only for the pinned stack:** the local GPU is `sm_89`; the pinned CUDA 11.3 toolchain
 builds through `sm_86` (`docs/VAST_TESTING.md`), and it has 6 GB regardless. Every CUDA-dependent
 gate — the `nndet/csrc` extension build, `tests/test_csrc_cuda.py` (never yet run, per
-`docs/m0-verification.md`), CAF/FDR CUDA memory profiling — is a cloud (`V`) gate, not local.
+`docs/m0-verification.md`), CAF/FDSF CUDA memory profiling — is a cloud (`V`) gate, not local.
 
 ## 13. Cloud testing / deployment
 
@@ -438,10 +538,10 @@ unchanged by this document.
 
 | Risk | Likelihood | Fallback |
 |---|---|---|
-| FDR/WAF build takes longer than budgeted | High | This is the largest new-code item in the plan (§0); if it slips past its phase gate, step down the budget ladder rather than compressing later phases. |
+| FDSF/WAF build takes longer than budgeted | High | This is the largest new-code item in the plan (§0); if it slips past its phase gate, step down the budget ladder rather than compressing later phases. |
 | Grade head does not learn on 220–340 lesions | Medium | Widen with the D3 unifocal-recovery audit before concluding the head is broken; report per-grade CIs regardless. |
 | `nnDetection csrc`/old-torch env won't build | High | Docker image with the exact pinned base; CPU fallback for NMS in smoke tests; this is the #1 environment blocker historically. |
-| GPU memory (3D + attention) | High | Smaller CAF/WAF windows, activation checkpointing, stage-5-only true attention, batch 1 + accumulation, AMP everywhere except FFT. |
+| GPU memory (3D + attention) | High | Smaller shared CAF/WAF windows, activation checkpointing, a predeclared fusion-level subset shared by both modules, batch 1 + accumulation, AMP everywhere except FFT. |
 | GGG4/5 tiny even after D3 audit | Certain (floor is 20/18) | Report CIs; consider the pre-registered GGG4+5 merged secondary analysis (ADR 0002 D8) once audit counts are known. |
 | Full 20-run matrix over budget | Med | Pre-committed ladder (§9); never drop folds for only some configs. |
 
@@ -449,8 +549,8 @@ unchanged by this document.
 
 ### Appendix — files to touch vs. reference
 
-**Create:** `nndet/arch/encoder/gcalf/{fdr,waf,lff,caf,grade_head,registry}.py`,
-`gcalf_configs/*.yaml`, `tests/gcalf/test_{fdr,waf,lff,caf,grade_head}.py`.
+**Create:** `nndet/arch/encoder/gcalf/{fdsf,waf,lff,caf,grade_head,registry}.py`,
+`gcalf_configs/*.yaml`, `tests/gcalf/test_{fdsf,waf,lff,caf,grade_head}.py`.
 **Edit:** `nndet/arch/encoder/modular.py` (registry calls), `gcalf_data/*` (rework for the D2
 two-head data contract — see `docs/phases/PHASE_1_data_pipeline.md`).
 **Adapt from:** `GFNet/gfnet.py::GlobalFilter` (§6), DCA/UCTransNet (§7 Q/K/V math).

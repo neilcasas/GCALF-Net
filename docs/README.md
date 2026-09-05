@@ -12,15 +12,15 @@ Start here:
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Master technical spec — the what and why. |
 | [`ROADMAP.md`](ROADMAP.md) | The architecture split into milestones, each with L/V pass/fail gates. |
 | [`adr/0001-gcalf-architecture-and-cloud.md`](adr/0001-gcalf-architecture-and-cloud.md) | Original architecture/cloud decisions. Amended by 0002 where noted (classifier class count, in particular). |
-| [`adr/0002-ggg2-5-masked-grade-head-and-built-fdr-waf.md`](adr/0002-ggg2-5-masked-grade-head-and-built-fdr-waf.md) | **Current** decisions: GGG2–5 lesion-level protocol, two-head model (detection + masked grade head), FDR/WAF to be built (not the released code), preprocessing contract, budget, local/cloud split. Read this first for *why*. |
+| [`adr/0002-ggg2-5-masked-grade-head-and-built-fdr-waf.md`](adr/0002-ggg2-5-masked-grade-head-and-built-fdr-waf.md) | **Current** decisions: GGG2–5 lesion-level protocol, two-head model, five-level FDSF/WAF baseline, inference-safe preprocessing, budget, and local/cloud split. Read this first for *why*. |
 | [`CLOUD_DEPLOYMENT_PLAN.md`](CLOUD_DEPLOYMENT_PLAN.md) | Provider-neutral GPU VM, S3-compatible storage, Docker, recovery, security, 20-run execution plan. |
-| [`GLOSSARY.md`](GLOSSARY.md) | Canonical meanings of FDR, WAF, LFF, CAF, grade head, and run artifacts. |
+| [`GLOSSARY.md`](GLOSSARY.md) | Canonical meanings of FDSF/FDR, WAF, LFF, CAF, grade head, and run artifacts. |
 
 Execution order:
 
 1. [`phases/PHASE_0_environment.md`](phases/PHASE_0_environment.md)
 2. [`phases/PHASE_1_data_pipeline.md`](phases/PHASE_1_data_pipeline.md)
-3. [`phases/PHASE_2_baseline.md`](phases/PHASE_2_baseline.md) — builds FDR, wires WAF, builds the masked grade head
+3. [`phases/PHASE_2_baseline.md`](phases/PHASE_2_baseline.md) — builds input-level FDSF, wires five-level WAF, builds the masked grade head
 4. [`phases/PHASE_3_lff.md`](phases/PHASE_3_lff.md)
 5. [`phases/PHASE_4_caf.md`](phases/PHASE_4_caf.md)
 6. [`phases/PHASE_5_integration_ablation.md`](phases/PHASE_5_integration_ablation.md)
@@ -30,17 +30,18 @@ Execution order:
 **ADR 0002 is authoritative** wherever it conflicts with ADR 0001, older thesis prose, or upstream
 repository comments — in particular: the protocol is **GGG2–5**, not GGG1–5 (PI-CAI has no
 spatial GGG1 mask); the model is **two heads** (one detection class + a separate masked
-grade head), not a single `classifier_classes`-way instance classifier; and **FDR and WAF do not
+grade head), not a single `classifier_classes`-way instance classifier; and **FDSF and WAF do not
 exist in the released code and must be built/wired** (`ARCHITECTURE.md §0`) — they are not two
 `ModuleList` slots waiting to be swapped.
 
-Where the shipped code and any document disagree, **the code wins** — verify against
-`ARCHITECTURE.md §0` before trusting a claim about what the encoder currently does. Three things
+For claims about what is implemented *now*, the shipped code wins; for the target study contract,
+`ARCHITECTURE.md` and accepted ADRs win until implementation catches up. Verify against
+`ARCHITECTURE.md §0` before trusting a claim about current encoder behavior. Three things
 that bite hardest: `dataset.json["labels"]` is `{"0": "csPCa"}` (one detection class — grade is
 separate instance metadata, not a detection class count); the training schedule is 50 epochs ×
 2500 batches + 10 SWA (not 1000 epochs, and there is no `EarlyStopping`); and
 `nndet/conf/train/smoke.yaml` already exists for tiny runs.
 
-**Known stale document:** `DATASCI17-THESIS-MASTERFILE.md` predates this session's decisions and
-a newer version is pending. Do not treat it as a source of truth for anything this documentation
-set decides; re-check it against `ARCHITECTURE.md`/the ADRs once the new version arrives.
+`DATASCI17-THESIS-MASTERFILE.md` has been aligned on the current task, ablation, five-level model,
+and preprocessing contract, but `ARCHITECTURE.md` and accepted ADRs remain authoritative for
+implementation details. Re-check later thesis copy-edits against them before submission.

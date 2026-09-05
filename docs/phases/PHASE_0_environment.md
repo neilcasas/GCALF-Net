@@ -18,7 +18,7 @@ installed into `GCALF-Net/`'s dependencies or reported as a thesis result.
 - [ ] **V:** `tests/test_csrc_cuda.py` **runs** (not skip) in the GPU container. This has never
       passed — `docs/m0-verification.md` records the Docker/NVIDIA-CDI failure that blocked it.
       Re-attempt on the actual Vast.ai host before trusting any later CUDA gate.
-- [ ] `nndet/arch/encoder/gcalf/` scaffolding (`fdr.py`, `waf.py`, `lff.py`, `caf.py`,
+- [ ] `nndet/arch/encoder/gcalf/` scaffolding (`fdsf.py`, `waf.py`, `lff.py`, `caf.py`,
       `grade_head.py`, `registry.py`) committed as empty modules on branch `feat/env-and-data`.
 - [ ] `environment.yml` + a sorted, non-editable `pip freeze` lock committed;
       `docs/m0-verification.md` updated with the new attempt's outcome.
@@ -50,7 +50,7 @@ The local RTX 4050 is `sm_89`. The pinned CUDA 11.3 toolchain builds through `sm
   unit tests, config/registry assertions, manifest/fold validation, real preprocessing on fold-0
   cases, synthetic CPU forward/backward, the 2-case CPU micro-overfit (Phase 2). These are the
   **L** gates throughout the roadmap.
-- **Everything CUDA-dependent** — the `csrc` extension build, `test_csrc_cuda.py`, FDR/WAF/LFF/CAF
+- **Everything CUDA-dependent** — the `csrc` extension build, `test_csrc_cuda.py`, FDSF/WAF/LFF/CAF
   memory profiling, real training — is a **V** gate, run on Vast.ai. Do not attempt to satisfy a
   V gate locally; it cannot build against this GPU's compute capability.
 - A **separate, disposable modern-torch/CUDA conda env** (e.g. `conda create -n gcalf-scratch
@@ -91,7 +91,7 @@ The local RTX 4050 is `sm_89`. The pinned CUDA 11.3 toolchain builds through `sm
    The CUDA test must run, not skip; assert `torch.cuda.is_available()` first inside the
    container. **This step has never succeeded** (`docs/m0-verification.md`) — treat it as an
    open blocker, not a formality, until it does.
-6. **Scaffold the gcalf code tree** (empty modules + `__init__.py` for `fdr.py`, `waf.py`,
+6. **Scaffold the gcalf code tree** (empty modules + `__init__.py` for `fdsf.py`, `waf.py`,
    `lff.py`, `caf.py`, `grade_head.py`, `registry.py` — see `ARCHITECTURE.md §2`). Commit.
 
 ## 0.4 nnDetection csrc build failure — the top risk
@@ -122,6 +122,6 @@ staging, recovery, and security workflow is in `docs/CLOUD_DEPLOYMENT_PLAN.md`.
 - Branch `feat/env-and-data`, commit "env: pinned gcalf conda env + gcalf scaffold + CPU encoder smoke".
 - Files: `environment.yml`, `requirements-tools.txt`, `env.lock.txt`, `Dockerfile`,
   `tests/test_{imports,encoder_cpu,csrc_cuda}.py`, empty
-  `nndet/arch/encoder/gcalf/{__init__,fdr,waf,lff,caf,grade_head,registry}.py`.
+  `nndet/arch/encoder/gcalf/{__init__,fdsf,waf,lff,caf,grade_head,registry}.py`.
 
 **Next:** `PHASE_1_data_pipeline.md`.

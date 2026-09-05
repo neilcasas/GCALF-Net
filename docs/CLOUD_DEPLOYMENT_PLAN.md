@@ -461,7 +461,8 @@ Cost controls:
 | Image | Imports, CUDA extension load, unit tests, image digest recorded |
 | Storage | Endpoint access works without public credentials; dry-run paths are correct |
 | Dataset | Full manifest, modality, split, and free-space checks pass |
-| GPU | Encoder forward/backward and stage-2/stage-5 CAF memory profile pass |
+| Gland segmenter | The prostate-gland model that supplies the crop centre is present, versioned, and produces a non-empty plausible mask for every case — it is a runtime dependency, not a training-only input (ADR 0002 D6) |
+| GPU | Five-level encoder forward/backward passes, and WAF/CAF memory profiles at every candidate fusion level meet the pre-declared criterion (this profiling is what freezes `fusion_levels`) |
 | Tiny train | Two epochs, checkpoint upload, forced stop, resume, predict, evaluate |
 | Recovery | Replacement VM resumes same run with at most one epoch lost |
 | Baseline | Fold-0 output is consistent with local baseline within declared tolerance |

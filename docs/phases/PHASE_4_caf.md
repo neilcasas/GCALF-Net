@@ -4,7 +4,8 @@
 
 ## Goal
 
-Replace **WAF**'s self-attention at stages `[2,5]` with true bidirectional Q/K/V cross-attention
+Replace **WAF**'s self-attention one-for-one at the fusion levels frozen by M2's profiling
+(`PHASE_2 §2.6`) with true bidirectional Q/K/V cross-attention
 between aligned CNN and Swin features — the *only* change from the frozen baseline
 (`ARCHITECTURE.md §7`). "CAF" always means this. TransFuse BiFusion is a named, non-cross-attention
 fallback and must never be relabeled CAF.
@@ -16,7 +17,8 @@ fallback and must never be relabeled CAF.
 - [ ] **L:** padded window positions are masked out of attention (`key_padding_mask`), not attended as real keys.
 - [ ] **L:** the aligned CNN feature reaches the output through exactly one residual path.
 - [ ] **L:** both branch projections receive gradients.
-- [ ] **V:** representative stage-2 and stage-5 tensors pass the declared GPU memory gate.
+- [ ] **V:** tensors from every frozen fusion level pass the GPU memory gate at the planner's
+      resolved patch size — the same levels and criterion WAF was profiled against at M2.
 - [ ] **V:** `caf_only` completes tiny-task train, resume, predict, and evaluation.
 
 ## 4.1 Integration contract
@@ -43,7 +45,7 @@ if kind == "caf":
 ## 4.2 Why windowed, and why bidirectional
 
 Global spatial cross-attention over `N=D*H*W` tokens stores an `N×N` matrix per head and is not
-viable at stage 2. Partitioning aligned features into windows bounds attention to
+viable at high-resolution encoder levels. Partitioning aligned features into windows bounds attention to
 `Nw = wd*wh*ww` tokens; complexity becomes `O(n_windows * Nw²)` — the same bound WAF already
 accepts for self-attention.
 
@@ -148,10 +150,10 @@ for reasons other than memory.
 model_cfg:
   encoder_kwargs:
     gcalf_cfg:
-      frequency_filter_type: fdr
+      frequency_filter_type: fdsf
       fusion_type: caf
-      freq_stages: [1, 3, 4]
-      fusion_stages: [2, 5]
+      num_levels: 5
+      fusion_levels: [0, 1, 2, 3, 4]   # starting point; frozen by M2 profiling
       caf:
         window_size: [2, 7, 7]
         num_heads: 4
@@ -176,26 +178,31 @@ constant is invalid. Store resolved per-stage values in the experiment snapshot.
   channel-compatible projection) changes the output.
 - Invalid head/channel and invalid window settings fail early.
 - Serialization round-trip is deterministic in evaluation mode.
-- CUDA peak memory and wall time captured at real stage-2/stage-5 shapes; declare the memory
+- CUDA peak memory and wall time captured at every frozen fusion level, at the planner's resolved
+  patch size; declare the memory
   acceptance criterion before profiling (e.g. "fits the target GPU with ≥10% free memory at batch
   1") — never assert an arbitrary byte count in a CPU unit test.
 
 ## 4.7 Fallback ladder
 
-Apply in order, record any architecture change:
-1. Reduce window from `(2,7,7)` to `(2,4,4)` — also cuts padding, since stage feature maps are far
-   more often multiples of 4 than of 7.
-2. Enable activation checkpointing around CAF.
-3. True windowed CAF at stage 5 only.
+M2's profiling should already have frozen an affordable `fusion_levels`; this ladder handles a CAF
+that still will not fit there. Apply in order, and freeze the outcome before any comparative fold
+is trained:
+1. Reduce window from `(2,7,7)` to `(2,4,4)` — also cuts padding, since feature maps are far more
+   often multiples of 4 than of 7.
+2. Enable activation checkpointing around both CAF and WAF.
+3. Drop the highest-resolution level(s) from the frozen subset — that is where the cost
+   concentrates — and re-run the WAF arm with the same reduced subset.
 4. TransFuse-style BiFusion as a separately named fallback experiment.
 
-Never silently replace CAF with BiFusion while retaining a cross-attention claim.
+Never silently replace CAF with BiFusion while retaining a cross-attention claim, and never reduce
+only CAF while leaving the WAF control at different fusion locations.
 
 ## 4.8 Integration sequence
 
 1. Complete window helper tests (reuse from Phase 2's WAF wiring if already present).
 2. Complete module gradient and shape tests.
-3. Profile standalone stage shapes.
+3. Profile standalone shapes for every frozen fusion level.
 4. Run an end-to-end encoder forward/backward.
 5. Overfit two cases (reuse Phase 2's cases).
 6. Run and resume the tiny task, then predict/evaluate.

@@ -1,10 +1,11 @@
-# Phase 2 — Build FDR + Wire WAF + Masked Grade Head (the baseline)
+# Phase 2 — Build Input-Level FDSF + Wire Five-Level WAF + Masked Grade Head (the baseline)
 
-**Milestones:** M2 (FDR+WAF built) → M3 (forward + grade-head overfit) → M4 (full train/eval ⭐) → M5 (budget ladder decision)
+**Milestones:** M2 (FDSF+WAF built) → M3 (forward + grade-head overfit) → M4 (full train/eval ⭐) → M5 (budget ladder decision)
 **Depends on:** Phase 1 · **Blocks:** LFF/CAF (they must each beat this on a single changed variable)
 
 **Goal:** unlike the released-code baseline PDHD-Net shipped with (wavelet + channel-light
-fusion), the thesis's defended hypotheses name a fixed spherical frequency mask (FDR) and
+fusion), the thesis's defended hypotheses name fixed 3D frequency-domain separation and shunting
+(FDSF) and
 window-based self-attention (WAF) — **neither exists in the code**, in either `PDHD-Net/` or
 `GCALF-Net/` (`ARCHITECTURE.md §0`). This phase builds them. It is the largest new-code item in
 the whole roadmap; do not treat it as a config flip.
@@ -15,17 +16,18 @@ the whole roadmap; do not treat it as a config flip.
 
 | Item | Current state | This phase |
 |---|---|---|
-| Frequency module, stages `[1,3,4]` | `WaveletSpatialFusion` (Haar wavelet, `WaveletFusion.py`) | Replace with new `FDR` (fixed FFT low/high split) |
-| Fusion module, stages `[2,5]` | `MemoryEfficientFusion`/`ChannelWiseLightFusion` (ECA-style) | Replace with `WindowAttentionFusion` (already written, `window_attention_fusion.py`, imported but dead) |
+| Frequency routing | Stage-local `WaveletSpatialFusion` (Haar wavelet) | Remove it from the experimental path; apply new fixed FDSF once to the input before both branches |
+| Fusion module | `MemoryEfficientFusion`/`ChannelWiseLightFusion` (ECA-style), currently hard-coded at `[2,5]` in a six-stage path | Replace with WAF at corresponding levels of the fixed five-level encoder |
 | Classifier head | Native `classifier_classes` foreground grades (rejected design) | One `csPCa` detection class (nnDetection's existing focal-loss anchor head, unchanged) + a **new** separate 4-logit grade head |
-| Dead parameters | `modular.py:158-165` constructs a fusion module for every stage but invokes only `[2,5]` | Fix while wiring WAF — do not carry four unused modules into every checkpoint |
+| Level contract | Planner may produce five or six levels (`modular.py:63`; `c002.py:196-204`); `BiFPN.py:224-225` unpacks `p3..p7, _` and drops the sixth. On a six-level plan that discarded input is the stage-5 fusion output, so the wired `[2,5]` fusion contributes through stage 2 only; on a five-level plan stage 5 never runs. | Assert exactly five encoder outputs and require all five to reach BiFPN |
+| Dead parameters | Current construction can instantiate unused fusion modules | Construct fusion only at the five resolved locations (or the one predeclared shared subset) |
 
-## 2.2 Build FDR (`nndet/arch/encoder/gcalf/fdr.py`)
+## 2.2 Build FDSF (`nndet/arch/encoder/gcalf/fdsf.py`)
 
 Per `ARCHITECTURE.md §5`:
 ```python
-class FrequencyDomainRefinement3D(nn.Module):
-    """Fixed spherical low/high FFT split. FDR is what the thesis's H1/H2 name as the baseline."""
+class FrequencyDomainSeparationAndShunting3D(nn.Module):
+    """Fixed spherical low/high FFT split applied once to the model input."""
 
     def __init__(self, radius=0.15):
         super().__init__()
@@ -50,11 +52,10 @@ class FrequencyDomainRefinement3D(nn.Module):
         r = torch.sqrt(dd**2 + hh**2 + ww**2)
         return (r <= radius).float()
 ```
-Route `X_low` toward the Swin branch input and `X_high` toward the CNN branch input — **confirm
-this exact routing direction against the thesis text before wiring `modular.py`**; if the thesis
-specifies the reverse, swap it there, not here.
+Route `X_low` toward the Swin branch input and `X_high` toward the CNN branch input. This is fixed
+by the PDHD-Net paper and is not an implementation-time choice.
 
-**Unit tests (`tests/gcalf/test_fdr.py`):** mask is exactly `1` at `r=0` and exactly `0` outside
+**Unit tests (`tests/gcalf/test_fdsf.py`):** mask is exactly `1` at `r=0` and exactly `0` outside
 `radius` (boundary case at `r==radius` inclusive, matching `<=`); `X_low + X_high` reconstructs
 `X` losslessly (complementary, no energy loss); shape preserved for odd and even `(D,H,W)`; a
 constant volume passes almost entirely into `X_low`; a Nyquist checkerboard `(-1)**(d+h+w)` passes
@@ -74,11 +75,17 @@ def build_waf(cnn_channels, transformer_channels, out_channels, window_size=(2, 
     return WindowAttentionFusion(cnn_channels, transformer_channels, out_channels,
                                   window_size=window_size, num_heads=num_heads)
 ```
-Read `WindowAttentionFusion.forward`'s existing signature before writing this wrapper — match it
-exactly rather than guessing. Replace the `MemoryEfficientFusion` construction at stages `[2,5]`
-with this, and **stop constructing fusion modules at stages `0,1,3,4`** (`modular.py:158-165`'s
-standing dead-parameter defect) — construct `nn.Identity()` there instead, for every fusion
-variant including WAF/CAF, not only the released baseline.
+Read `WindowAttentionFusion.forward`'s existing signature before writing this wrapper—match it
+exactly rather than guessing. Build a fixed five-level encoder and confirm it emits, and BiFPN
+consumes, exactly five features.
+
+`fusion_levels` starts at `[0,1,2,3,4]` but is **settled by measurement, not by the config
+default** (`ARCHITECTURE.md §4`, ADR 0002 D5). Level 0 carries no stride, so fusing there means
+windowed attention on the full-resolution map plus a trilinear upsample of the Swin feature to
+match — the near-full-resolution 3D attention ADR 0001 flagged as the primary OOM risk. Profile
+every level at the planner's resolved patch size in §2.6's V gate **before any comparative fold is
+trained**, freeze the subset that measurement selects, and use it unchanged for WAF and CAF in all
+four arms. Construct fusion modules only at the frozen locations.
 
 **Unit tests (`tests/gcalf/test_waf.py`):** output shape matches CNN spatial dims; gradients reach
 both input projections; a fixed-seed run matches `WindowAttentionFusion`'s own pre-existing
@@ -87,12 +94,13 @@ behavior (this module isn't new — confirm the wrapper doesn't change its numer
 ## 2.4 Registry (`nndet/arch/encoder/gcalf/registry.py`)
 
 ```python
-def build_frequency_module(kind, in_channels, out_channels, options=None):
+def build_frequency_module(kind, in_channels, options=None):
+    """Both branches return (x_low, x_high) and preserve in_channels."""
     options = options or {}
-    if kind == "fdr":
-        return FrequencyDomainRefinement3D(**options)
+    if kind == "fdsf":
+        return FrequencyDomainSeparationAndShunting3D(**options)
     if kind == "lff":
-        return LearnableFrequencyFilter3D(in_channels, out_channels, **options)
+        return LearnableFrequencyFilter3D(in_channels, **options)
     raise ValueError(f"Unknown frequency_filter_type: {kind}")
 
 def build_fusion_module(kind, cnn_channels, transformer_channels, out_channels, options=None):
@@ -103,9 +111,17 @@ def build_fusion_module(kind, cnn_channels, transformer_channels, out_channels, 
         return WindowedCrossAttentionFusion3D(cnn_channels, transformer_channels, out_channels, **options)
     raise ValueError(f"Unknown fusion_type: {kind}")
 ```
-`modular.py` calls only these two functions; it never names `FrequencyDomainRefinement3D` or
-`WindowAttentionFusion` directly. Baseline defaults: `frequency_filter_type: fdr`,
-`fusion_type: waf`, `freq_stages: [1,3,4]`, `fusion_stages: [2,5]`.
+`modular.py` calls only these two functions; it never names the concrete FDSF/LFF or WAF/CAF
+classes directly. Baseline defaults: `frequency_filter_type: fdsf`, `fusion_type: waf`,
+`num_levels: 5`, `fusion_levels: [0,1,2,3,4]` (starting point — frozen by §2.6's profiling). The
+frequency module runs once at input and has no `freq_stages` setting.
+
+**Both frequency branches must share one output contract:** `(x_low, x_high)`, each with the
+input's shape and channel count, `x_low + x_high == x`. `Encoder.forward` unpacks the pair and
+routes `x_low` to Swin and `x_high` to CNN without knowing which module produced it. A
+single-tensor LFF would leave `lff_only` with no shunting and turn a one-variable swap into a
+different pipeline — see `ARCHITECTURE.md §6` and ADR 0002 D4. There is no `out_channels`
+parameter: the frequency stage sits before the encoder and cannot change channel count.
 
 ## 2.5 Masked grade head (`nndet/arch/encoder/gcalf/grade_head.py`)
 
@@ -147,9 +163,19 @@ per-fold when given different training partitions; the head's output shape is al
 
 ## 2.6 M2 — forward pass & grade-head overfit
 
-1. **Forward**: `torch.randn(1,3,32,256,256)` (Phase 1's fixed crop shape) through the encoder
-   with FDR+WAF; assert no shape error through encoder → BiFPN → detection head → grade head.
-2. **Overfit 2 real cases** — one grade-supervised positive, one benign:
+1. **Forward**: `torch.randn(1,3,32,256,256)` through the encoder with FDSF+WAF; assert exactly
+   five encoder tensors reach BiFPN with no shape error through the detection and grade heads.
+   This is a deliberate **worst-case smoke shape, not the training shape** — the raw task's
+   geometry is trimmed by `crop_to_nonzero`, resampled by the planner, and then patched, so real
+   batches arrive at the planner's resolved patch size (`PHASE_1 §1.2`).
+2. **V: profile fusion levels, then freeze them.** Record CUDA peak memory and step time for WAF at
+   every candidate level, at the planner's resolved patch size, batch 1. Declare the acceptance
+   criterion first (e.g. "fits the target GPU with ≥10% headroom"). The measurement selects the
+   frozen `fusion_levels`; record it in the M2 gate record and in every `config_snapshot.yaml`.
+   This happens **before** M4, and the frozen subset is reused verbatim for CAF in Phase 4 — a
+   subset chosen after seeing fold results is test-set tuning (§2.9's rule, applied to
+   architecture).
+3. **Overfit 2 real cases** — one grade-supervised positive, one benign:
    - Train 200 steps; assert final 10-step mean total loss ≤10% of the initial mean.
    - The positive case's matched detection predicts `csPCa` at ≥0.9 and its correct GGG2–5 grade
      at ≥0.9.
@@ -185,7 +211,7 @@ numbers are meaningless on 6 cases.
   4×4 grade confusion matrix over grade-supervised matched lesions, weighted F1, per-grade
   sensitivity, both denominators (detection, grade-matched) reported side by side.
 - **Tag `baseline-v1`.** Every later config (LFF, CAF, full) is compared against this exact commit
-  and these numbers. Report plainly in the thesis that this baseline is FDR+WAF as specified by
+  and these numbers. Report plainly in the thesis that this baseline is FDSF+WAF as specified by
   the paper's hypotheses, not the released `WaveletSpatialFusion`/`ChannelWiseLightFusion` code
   (ADR 0002 D4) — and if it underperforms the released code, report that rather than switching.
 
@@ -207,16 +233,16 @@ test-set tuning, not budgeting.
 
 | Risk | Fallback |
 |---|---|
-| FDR/WAF build slips past its gate | Step down the M5 ladder rather than compressing LFF/CAF phases; do not skip the M2/M3 gates to catch up. |
+| FDSF/WAF build slips past its gate | Step down the M5 ladder rather than compressing LFF/CAF phases; do not skip the M2/M3 gates to catch up. |
 | Grade head leaks gradient from unsupervised lesions | The M3 overfit test catches this directly — fix the mask in §2.5, do not add more training data to compensate. |
-| OOM at the plan's patch size | Reduce patch size in the plan; batch 1 + grad-accum; AMP everywhere except the FDR/LFF FFT block. |
+| OOM at the plan's patch size | Reduce patch size; batch 1 + accumulation; reduce WAF/CAF levels only as one predeclared shared subset; keep AMP off only inside the FDSF/LFF FFT block. |
 | Baseline numbers implausibly low | Re-run the M3 overfit test; re-check Phase 1's label mapping and channel order before touching the model. |
 
 ## 2.11 Deliverables & commit
 
-- Branch `feat/baseline-fdr-waf` → tag `baseline-v1`.
-- Files: `nndet/arch/encoder/gcalf/{fdr,waf,grade_head,registry}.py`,
-  `tests/gcalf/test_{fdr,waf,grade_head}.py`, `tests/test_overfit.py`, baseline `metrics.csv` +
+- Branch `feat/baseline-fdsf-waf` → tag `baseline-v1`.
+- Files: `nndet/arch/encoder/gcalf/{fdsf,waf,grade_head,registry}.py`,
+  `tests/gcalf/test_{fdsf,waf,grade_head}.py`, `tests/test_overfit.py`, baseline `metrics.csv` +
   confusion matrix under `gcalf_experiments/baseline_seedNN/`, `docs/CLOUD_DEPLOYMENT_PLAN.md`'s
   `run.json` recording the M5 ladder decision.
 

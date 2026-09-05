@@ -14,11 +14,11 @@ not passed. See `docs/adr/0002-*.md` for why each milestone is shaped this way.
 |---|---|---|---|---|
 | M0 | Environment | [0](phases/PHASE_0_environment.md) | `nndet`, PI-CAI tools, medcam all import; CUDA build verified | L, V |
 | M1 | Data pipeline | [1](phases/PHASE_1_data_pipeline.md) | Validated task: `csPCa` detection class (1,500 cases) + grade metadata (220+ audited lesions) | L |
-| M2 | Baseline build (FDR + WAF) | [2](phases/PHASE_2_baseline.md) | FDR built, WAF wired, replacing the released wavelet/channel-light modules | L, V |
+| M2 | Baseline build (FDSF + WAF) | [2](phases/PHASE_2_baseline.md) | Input-level FDSF built; WAF wired across the five-level encoder; `fusion_levels` profiled and frozen | L, V |
 | M3 | Baseline forward + overfit | [2](phases/PHASE_2_baseline.md) | Grade head loss routing correct; 2-case overfit drives loss to ~0 | L, V |
-| M4 ⭐ | Baseline full train | [2](phases/PHASE_2_baseline.md) | Real FDR+WAF baseline numbers on PI-CAI — thesis's first result | V |
+| M4 ⭐ | Baseline full train | [2](phases/PHASE_2_baseline.md) | Real FDSF+WAF baseline numbers on PI-CAI — thesis's first result | V |
 | M5 | Budget ladder decision | [2](phases/PHASE_2_baseline.md) | Fold-0 pilot measurement selects a pre-committed matrix rung | V |
-| M6 | LFF | [3](phases/PHASE_3_lff.md) | Learned real-valued gain replaces FDR's fixed mask, baseline-invariant | L, V |
+| M6 | LFF | [3](phases/PHASE_3_lff.md) | Learned response replaces FDSF's fixed response at the same input slot, same `(x_low, x_high)` arity | L, V |
 | M7 | CAF | [4](phases/PHASE_4_caf.md) | Bidirectional windowed Q/K/V replaces WAF's self-attention | L, V |
 | M8 | Full GCALF + ablation matrix | [5](phases/PHASE_5_integration_ablation.md) | All four configs run on identical folds/seeds | V |
 | M9 | Evaluation | [6](phases/PHASE_6_evaluation.md) | Detection + grade metrics + defended stats + bootstrap CIs, every config | L, V |
@@ -55,36 +55,55 @@ metadata (`grade`, `grade_source`, `grade_supervised`) on every positive instanc
 graded lesions plus whatever the unifocal linkage recovery audit (Phase 1) adds from the 205
 Pooch25 cases. Official 5-fold splits loaded and independently verified.
 
-**Known gap.** `gcalf_data/{build_labels,prepare_picai,sanity_checks}.py` currently implement the
-rejected native-4-class design (ADR 0002 D2's rejected alternative). They need real rework, not a
-patch — see Phase 1 for the scope.
+**Known gap.** The label contract has been reworked, but `gcalf_data/preprocessing.py` still needs
+four changes before M1 can close:
+
+1. `resolve_crop_center` (`:76-107`) takes the lesion mask and can return `"union"` /
+   `"lesion_only"` centres — target leakage in validation/test preprocessing. Replace with a
+   whole-gland-only rule plus post-crop QC.
+2. The crop is a fixed **256 voxels** (`IN_PLANE_SIZE`), which is 60–160 mm of anatomy depending on
+   scanner. Replace with a fixed 128 mm field of view (ADR 0002 D6).
+3. `zscore_normalize` (`:205`) runs before nnDetection's own `nonCT` pass — delete it.
+4. Its docstrings (`:5`, `:81`, `:230`) cite "ARCHITECTURE.md Sec 3.3", which does not exist, and
+   describe the union/lesion-only fallbacks as sanctioned. Re-point them at `§3` and the current
+   contract as part of the same rework.
 
 **L gate.**
 ```bash
 python -m gcalf_data.sanity_checks    # all asserts green
 ```
 covering: identical spacing/orientation across T2W/ADC/HBV after resampling to a common grid;
+crop coordinates derived only from inference-available whole-gland/T2W information; no
+union/lesion-only crop path; the crop specified as a physical FOV, not a voxel count; all 425
+positives audited for voxel/component retention by a committed script, with any exclusion recorded
+under D6 item 7's predeclared rule; exactly one normalization pass;
 `dataset.json["labels"] == {"0": "csPCa"}`; every instance's detection class is `0`; every graded
 instance's `grade ∈ {2,3,4,5}`; instance-volume IDs == `case.json` keys; no `patient_id` crosses
 folds; every held-out fold contains every grade.
-**Closes when.** Sanity checks pass, the linkage-recovery audit report is committed, and
-`docs/data_report.md` records the final grade-supervised lesion count per grade.
+**Closes when.** Sanity checks pass; `gcalf_data/audit_crop_retention.py` is committed and its
+128 mm re-audit reported; `docs/data_report.md` is regenerated and records the final
+grade-supervised lesion count per grade plus the retention table; and the resolved nnDetection
+spacing, patch size, `nonCT` scheme, `use_mask_for_norm`, and asserted five-level plan are captured
+in the dataset manifest.
 **Watch.** Any GGG1 (ISUP 1) foreground detection instance, or any grade assigned by inference
 rather than the audit's 1-lesion/1-component rule, means the labels were fabricated — fix the
 data, never the plan.
 
-## M2 — Baseline build: FDR + WAF
+## M2 — Baseline build: FDSF + WAF
 
-**Goal.** Build the fixed FFT frequency decomposition (FDR) and wire the existing (but dead)
-`WindowAttentionFusion` (WAF) as the frozen control, per `ARCHITECTURE.md §5, §7`. This is new
-code, not a config flag — treat it as the largest single engineering item in the plan.
+**Goal.** Build input-level fixed FFT frequency decomposition and shunting (FDSF) and wire the
+existing (but dead) `WindowAttentionFusion` (WAF) across the fixed five-level encoder as the frozen
+control, per `ARCHITECTURE.md §5, §7`.
 
-**L gate.** `pytest tests/gcalf/test_fdr.py tests/gcalf/test_waf.py` — mask radius exact,
+**L gate.** `pytest tests/gcalf/test_fdsf.py tests/gcalf/test_waf.py` — mask radius exact,
 low/high split reconstructs the input losslessly, orientation gates pass (constant → low branch,
 Nyquist checkerboard → high branch), WAF shape/gradient tests pass, CPU forward/backward through
-the full encoder at `(1,3,32,256,256)`.
-**V gate.** CUDA forward/backward parity with the CPU result; peak memory at stages `[1,3,4]`
-(FDR) and `[2,5]` (WAF) recorded.
+the full encoder at `(1,3,32,256,256)`; exactly five feature outputs reach the decoder.
+**V gate.** CUDA forward/backward parity with the CPU result; input-level FDSF memory recorded, and
+**WAF memory profiled at every candidate fusion level at the planner's resolved patch size** against
+a criterion declared before profiling. That measurement freezes `fusion_levels` — it is not
+inherited from the config default. The frozen subset is shared verbatim by WAF and CAF in all four
+arms and is never revisited after fold results exist.
 **Closes when.** Both modules pass their tests and are wired as the `baseline` config's default.
 
 ## M3 — Baseline forward pass + grade-head overfit
@@ -103,7 +122,7 @@ from an unsupervised lesion, is broken, not undertrained.
 
 ## M4 ⭐ — Baseline full train
 
-**Goal.** FDR+WAF baseline trained on real PI-CAI folds at the shipped schedule (50 epochs × 2500
+**Goal.** FDSF+WAF baseline trained on real PI-CAI folds at the shipped schedule (50 epochs × 2500
 batches + 10 SWA), evaluated, reported. **This is the reference column every later result is
 measured against**, and it is the paper's architecture adapted to 3-channel bpMRI — not the
 released `WaveletSpatialFusion`/`ChannelWiseLightFusion` code (ADR 0002 D4). State that plainly in
@@ -129,21 +148,24 @@ choosing after seeing fold results is test-set tuning.
 
 ## M6 — LFF
 
-**Goal.** `LearnableFrequencyFilter3D` replaces FDR at stages `[1,3,4]` via the registry; FDR
-remains the default so the refactor cannot move the baseline.
+**Goal.** `LearnableFrequencyFilter3D` replaces the single input-level FDSF module via the
+registry, returning the same `(x_low, x_high)` pair and initialized as FDSF's own spherical mask
+plus a zero delta; FDSF remains the default so the refactor cannot move the baseline.
 
-**L gate.** `pytest tests/gcalf/test_lff.py` — shape in==out; identity at init (`delta_H=0`); the
+**L gate.** `pytest tests/gcalf/test_lff.py` — shape in==out on both outputs; `x_low + x_high == x`;
+**equals FDSF exactly at init** (`delta_H=0`) rather than merely equalling the input; the
 **orientation gate** (centre-weighted grid low-passes: constant survives, Nyquist checkerboard is
 suppressed — catches a missing `ifftshift`); gradients reach `delta_weight`; finite under autocast
-on CPU. Plus a fixed-seed regression test proving the FDR baseline's output is byte-identical
+on CPU. Plus a fixed-seed regression test proving the FDSF baseline's output is byte-identical
 after the registry refactor.
-**V gate.** Finite gradients and stable logging on one short CUDA run; per-stage peak memory
+**V gate.** Finite gradients and stable logging on one short CUDA run; full-input peak memory
 recorded.
 **Closes when.** Tests pass; `lff_only` completes tiny train/resume/predict/eval.
 
 ## M7 — CAF
 
-**Goal.** `WindowedCrossAttentionFusion3D` replaces WAF at stages `[2,5]` with genuine
+**Goal.** `WindowedCrossAttentionFusion3D` replaces WAF one-for-one at the same five declared
+fusion levels with genuine
 bidirectional cross-attention (CNN queries Swin, Swin queries CNN) in place of WAF's
 self-attention.
 
@@ -151,8 +173,8 @@ self-attention.
 padded shapes; padding invariance (fails without `key_padding_mask`); residual counted exactly
 once (zero attention outputs + identity `out_proj` ⟹ output == aligned CNN feature, not a multiple
 of it); both branch projections receive gradients.
-**V gate.** Stage-2/stage-5 tensors pass the declared memory gate; short CUDA training segment
-with finite losses.
+**V gate.** All declared five-level feature tensors pass the memory gate; short CUDA training
+segment with finite losses.
 **Closes when.** Tests pass; `caf_only` completes tiny train/resume/predict/eval.
 **Watch.** If windowed attention will not fit, walk the fallback ladder (`ARCHITECTURE.md §7`)
 and report the resolved architecture. BiFusion is never relabeled CAF.
@@ -165,10 +187,12 @@ work, no new model code.
 
 **V gate.** `gcalf_eval/collect_results.py` emits one table, rows = 4 configs, baseline as
 reference column with Δ per metric; each run directory carries `config_snapshot.yaml`,
-`git_commit.txt`, `env.txt`; re-running `baseline.yaml` after the registry refactor matches
+`git_commit.txt`, `env.txt`, preprocessing/dataset/split hashes, and the resolved five-level plan;
+re-running `baseline.yaml` after the registry refactor matches
 `baseline-v1` exactly (a drifted baseline invalidates the whole comparison — check this before
 trusting any ablation result).
-**Closes when.** The four-way table exists and no fold was dropped for only some configs.
+**Closes when.** The four-way table exists, no fold was dropped for only some configs, and the only
+differences between arms are `{FDSF,LFF}` and `{WAF,CAF}`.
 
 ## M9 — Evaluation & statistics
 
@@ -178,7 +202,8 @@ patient-level bootstrap CIs (ADR 0002 D7 — both, not one instead of the other)
 **L gate.** Metric and statistical-decision-tree tests on fixed synthetic fixtures, covering every
 branch (normal → ANOVA/Tukey; non-normal → Friedman/Wilcoxon).
 **V gate.** Evaluate each completed fold; aggregate only after the full matrix is present; compute
-paired bootstrap CIs from preserved out-of-fold predictions.
+paired bootstrap CIs from preserved out-of-fold predictions. Report crop-QC exceptions and confirm
+that validation preprocessing never used lesion location.
 **Closes when.** Weighted F1 (primary), macro-F1, per-grade sensitivity/precision, quadratic
 Cohen's κ, FROC, case-level AUROC, the defended p-value, and bootstrap CIs are all reported per
 config, with the detection and grade-matched denominators shown side by side (never collapsed).
@@ -190,7 +215,8 @@ review packets for 3 urologists, 30 cases stratified across GGG2–5.
 
 **L gate.** Hook/target/shape test on synthetic tensors; rendered overlay pipeline runs
 end-to-end on a synthetic case.
-**V gate.** Held-out inference on real cases; export of the approved, blinded review set.
+**V gate.** Held-out inference on real cases; native-space overlays reconstructed using the saved
+registration, crop, z-resampling, and padding transforms; export of the approved blinded review set.
 **Closes when.** CAMs localize to matched lesions on known positives; packets + rating sheets are
 in urologists' hands. **Start recruiting the three urologists at M0** — they are the only
 dependency outside this team's control and they sit at the end of the chain.

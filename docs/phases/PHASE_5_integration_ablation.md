@@ -11,6 +11,10 @@ work — no new model code.
 - [ ] **V:** all four configs run on the **same folds and seeds**; outputs in per-config dirs.
 - [ ] **V:** `gcalf_eval/collect_results.py` emits one comparison table (baseline as reference column).
 - [ ] **L:** re-running `baseline.yaml` after every registry change still matches `baseline-v1` exactly.
+- [ ] **L:** all arms share the same five-level plan, preprocessing/crop-QC manifest, case set,
+      **frozen `fusion_levels`**, folds, seeds, schedule, augmentation, decoder, and heads.
+- [ ] **L:** the only differences between arms are `{FDSF, LFF}` and `{WAF, CAF}`; both frequency
+      modules return `(x_low, x_high)`, so no arm differs in pipeline shape.
 
 ---
 
@@ -18,9 +22,9 @@ work — no new model code.
 
 | Config file | `frequency_filter_type` | `fusion_type` | Answers |
 |---|---|---|---|
-| `baseline.yaml` | `fdr` | `waf` | SOP 1 (built FDR/WAF baseline) |
+| `baseline.yaml` | `fdsf` | `waf` | SOP 1 (built FDSF/WAF baseline) |
 | `lff_only.yaml` | `lff` | `waf` | SOP 2a (LFF contribution) |
-| `caf_only.yaml` | `fdr` | `caf` | SOP 2b (CAF contribution) |
+| `caf_only.yaml` | `fdsf` | `caf` | SOP 2b (CAF contribution) |
 | `gcalf_full.yaml` | `lff` | `caf` | SOP 2c + 3 (combined + significance) |
 
 ```yaml
@@ -30,9 +34,9 @@ model_cfg:
     gcalf_cfg:
       frequency_filter_type: lff
       fusion_type: caf
-      freq_stages: [1, 3, 4]
-      fusion_stages: [2, 5]
-      lff: {grid_size: [4, 8, 8], groups: 8}
+      num_levels: 5
+      fusion_levels: [0, 1, 2, 3, 4]   # starting point; frozen by M2 profiling
+      lff: {grid_size: [4, 8, 8], groups: 1}   # in_channels is 3 at the input; 3 % 8 != 0
       caf: {window_size: [2, 7, 7], num_heads: 4, dropout: 0.0}
 ```
 
@@ -63,8 +67,9 @@ maybe one registry branch.
 5. **Launch matrix** via `cloud/run_matrix.sh` (`docs/CLOUD_DEPLOYMENT_PLAN.md`); loops configs ×
    folds × the one primary seed, each writing its own directory. Parallelize independent jobs only
    when budget allows.
-6. **Immutable inputs:** every run records dataset-manifest SHA-256, split-file SHA-256, container
-   image digest, config SHA-256, git commit, command line.
+6. **Immutable inputs:** every run records dataset-manifest SHA-256, crop-QC-report SHA-256,
+   split-file SHA-256, container image digest, config SHA-256, git commit, command line, and the
+   resolved five-level feature/decoder plan. Lesion masks never select validation crop coordinates.
 7. **No test-fold tuning:** window size, grid size, learning rate, and stopping rules are frozen
    from Phase 3/4's unit/tiny/validation evidence before this matrix starts.
 
@@ -96,7 +101,8 @@ how plausible any individual config's numbers look.
 | Risk | Fallback |
 |---|---|
 | Compute cannot afford the Phase 2 M5-committed rung after all | Step down to the next pre-committed rung (halved schedule → 14-run reduced), record which, and state the deviation from the M5 record in the thesis. Never drop folds for only some configs. |
-| Full GCALF-Net OOMs when baseline fits | Reduce CAF windows, checkpoint CAF activations, restrict true CAF to stage 5. BiFusion is only a separately named fallback. |
+| Full GCALF-Net OOMs when baseline fits | Reduce the shared CAF/WAF window or checkpoint both modules; if levels must be reduced, freeze one shared valid subset and rerun every affected arm. BiFusion remains separately named. |
+| A fusion level is unaffordable | Freeze one reduced valid subset before the matrix and rerun both WAF and CAF arms with that subset; never use mismatched fusion sites. |
 | Registry drift breaks baseline invariance | Revert to `baseline-v1`'s module-construction path; add/strengthen the regression test until it catches the drift. |
 | One config diverges during training | Isolate: it's config-only, so re-check that config's flags first; the other three are architecturally unaffected. |
 
