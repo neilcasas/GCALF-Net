@@ -1,4 +1,4 @@
-"""Validate the raw PI-CAI GGG2--5 nnDetection task before planning."""
+"""Validate the raw PI-CAI csPCa nnDetection task before planning."""
 
 import argparse
 import json
@@ -7,15 +7,32 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
-from gcalf_data.build_labels import GGG_LABELS, marksheet_summary
+from gcalf_data.build_labels import GRADE_NAMES, VALID_GRADES, marksheet_summary
 from gcalf_data.prepare_picai import load_splits
-
+from gcalf_data.preprocessing import TARGET_FOV_MM, fov_mm_to_inplane_size
 
 EXPECTED_MODALITIES = {"0": "T2W", "1": "ADC", "2": "HBV"}
+EXPECTED_NUM_SLICES = 32
 
 
 def case_ids(images_dir: Path) -> List[str]:
     return sorted(path.name[:-12] for path in images_dir.glob("*_0000.nii.gz"))
+
+
+def _assert_matching_geometry(reference, image, case_id: str, label: str) -> None:
+    """Compare two sitk.Image geometries the same way nndet's own
+    `_check_itk_params` does: exact size, approximate spacing/origin/direction.
+    NIfTI stores the affine as float32, so real (gantry-tilted, non-axis-aligned)
+    direction matrices pick up ~1e-6-scale round-trip noise on every extra
+    read/write (e.g. nnunet2nndet's own re-encode) -- numpy's very tight default
+    allclose tolerance (atol=1e-8) flags that noise as a mismatch, so use a
+    tolerance sized for float32 precision instead."""
+    import numpy as np
+
+    assert reference.GetSize() == image.GetSize(), f"{case_id}: {label} size differs"
+    assert np.allclose(reference.GetSpacing(), image.GetSpacing(), atol=1e-4), f"{case_id}: {label} spacing differs"
+    assert np.allclose(reference.GetOrigin(), image.GetOrigin(), atol=1e-4), f"{case_id}: {label} origin differs"
+    assert np.allclose(reference.GetDirection(), image.GetDirection(), atol=1e-4), f"{case_id}: {label} direction differs"
 
 
 def validate_splits(splits: List[Dict[str, List[str]]], expected_cases: Iterable[str]) -> None:
@@ -39,7 +56,9 @@ def validate_splits(splits: List[Dict[str, List[str]]], expected_cases: Iterable
     assert validation_cases == expected_cases, "Validation folds do not cover every task case exactly once"
 
 
-def validate_task(task_dir: Path) -> Tuple[Counter, List[str]]:
+def validate_task(task_dir: Path) -> Tuple[Counter, int, List[str]]:
+    """Returns (grade-supervised instance counts per grade, count of instances
+    left grade-unsupervised, case ids)."""
     try:
         import numpy as np
         import SimpleITK as sitk
@@ -48,34 +67,58 @@ def validate_task(task_dir: Path) -> Tuple[Counter, List[str]]:
 
     with (task_dir / "dataset.json").open() as file:
         dataset = json.load(file)
-    assert dataset["labels"] == {str(key - 1): value for key, value in GGG_LABELS.items()}
+    assert dataset["labels"] == {"0": "csPCa"}, f"Expected a single csPCa foreground class, found {dataset['labels']}"
     assert dataset["modalities"] == EXPECTED_MODALITIES
 
     images_dir = task_dir / "raw_splitted" / "imagesTr"
     labels_dir = task_dir / "raw_splitted" / "labelsTr"
     cases = case_ids(images_dir)
     assert cases, f"No T2W images found in {images_dir}"
-    counts = Counter()
+
+    grade_counts: Counter = Counter()
+    ungraded_positive_count = 0
     for case_id in cases:
         images = [sitk.ReadImage(str(images_dir / f"{case_id}_{modality:04d}.nii.gz")) for modality in range(3)]
-        geometry = (images[0].GetSize(), images[0].GetSpacing(), images[0].GetOrigin(), images[0].GetDirection())
         for image in images[1:]:
-            assert (image.GetSize(), image.GetSpacing(), image.GetOrigin(), image.GetDirection()) == geometry
+            _assert_matching_geometry(images[0], image, case_id, "modality")
+        spacing = images[0].GetSpacing()  # (x, y, z)
+        expected_size_y, expected_size_x = fov_mm_to_inplane_size((spacing[1], spacing[0]), TARGET_FOV_MM)
+        size = images[0].GetSize()  # (x, y, z)
+        assert size[0] == expected_size_x and size[1] == expected_size_y, (
+            f"{case_id}: expected {expected_size_x}x{expected_size_y} in-plane "
+            f"({TARGET_FOV_MM:.0f}mm FOV at spacing {spacing[0]:.3f}x{spacing[1]:.3f}mm), found {size[0]}x{size[1]}"
+        )
+        assert size[2] == EXPECTED_NUM_SLICES, f"{case_id}: expected {EXPECTED_NUM_SLICES} slices, found {size[2]}"
 
         label_path = labels_dir / f"{case_id}.nii.gz"
         label = sitk.ReadImage(str(label_path))
-        assert (label.GetSize(), label.GetSpacing(), label.GetOrigin(), label.GetDirection()) == geometry
-        ids = set(np.unique(sitk.GetArrayFromImage(label)).tolist()) - {0}
+        _assert_matching_geometry(images[0], label, case_id, "label")
+
         with (labels_dir / f"{case_id}.json").open() as file:
-            instances = json.load(file)["instances"]
-        assert ids == {int(instance_id) for instance_id in instances}, (
-            f"Instance IDs disagree for {case_id}"
-        )
-        assert all(int(class_id) in range(4) for class_id in instances.values()), (
-            f"Invalid GGG class for {case_id}"
-        )
-        counts.update(int(class_id) for class_id in instances.values())
-    return counts, cases
+            metadata = json.load(file)
+        instances = metadata["instances"]
+        grades = metadata.get("grades", {})
+        grade_sources = metadata.get("grade_sources", {})
+        grade_supervised = metadata.get("grade_supervised", {})
+
+        ids_in_mask = set(np.unique(sitk.GetArrayFromImage(label)).tolist()) - {0}
+        assert ids_in_mask == {int(instance_id) for instance_id in instances}, f"Instance IDs disagree for {case_id}"
+        assert all(class_id == 0 for class_id in instances.values()), f"Non-zero detection class for {case_id}"
+        assert set(grade_supervised) == set(instances), f"grade_supervised keys disagree with instances for {case_id}"
+
+        for instance_id, supervised in grade_supervised.items():
+            if supervised:
+                assert instance_id in grades and grades[instance_id] in VALID_GRADES, (
+                    f"{case_id} instance {instance_id}: grade_supervised but missing/invalid grade"
+                )
+                assert instance_id in grade_sources, f"{case_id} instance {instance_id}: missing grade_source"
+                grade_counts[grades[instance_id]] += 1
+            else:
+                assert instance_id not in grades, (
+                    f"{case_id} instance {instance_id}: grade present despite grade_supervised=false"
+                )
+                ungraded_positive_count += 1
+    return grade_counts, ungraded_positive_count, cases
 
 
 def validate_plan(plan_path: Path) -> None:
@@ -83,12 +126,13 @@ def validate_plan(plan_path: Path) -> None:
         plan = pickle.load(file)
     architecture = plan["architecture"]
     assert architecture["in_channels"] == 3
-    assert architecture["classifier_classes"] == 4
+    assert architecture["classifier_classes"] == 1
 
 
 def write_report(
     report_path: Path,
-    instance_counts: Counter,
+    grade_counts: Counter,
+    ungraded_positive_count: int,
     marksheet_path: Path,
     splits: List[Dict[str, List[str]]],
 ) -> None:
@@ -96,17 +140,19 @@ def write_report(
     lines = [
         "# PI-CAI M1 data report",
         "",
-        "- Cohort: 1,295 cases with original granular human-expert csPCa masks.",
-        "- Target: per-lesion GGG2--5; PI-CAI does not provide spatial GGG1 masks.",
-        "- ISUP 0 and 1 cases remain zero-instance negatives; no benign foreground class is created.",
+        "- Cohort: all 1,500 cases train csPCa detection (single foreground class).",
+        "- Grade supervision: only grade-resolved lesions (human_expert masks directly, plus "
+        "audit-recovered Pooch25 unifocal cases) train the separate GGG2-5 grade head; this is "
+        f"{sum(grade_counts.values())} of {sum(grade_counts.values()) + ungraded_positive_count} "
+        "positive lesions -- never the full detection-training cohort.",
+        "- ISUP 0 and 1 cases remain zero-instance negatives; no benign or GGG1 foreground class is created.",
         "- Modalities: T2W, ADC, HBV/high-b DWI (`_0000`, `_0001`, `_0002`).",
         "",
-        "## Instance counts",
+        "## Grade-supervised instance counts",
         "",
     ]
-    lines.extend(
-        f"- {GGG_LABELS[class_id + 1]}: {instance_counts[class_id]}" for class_id in range(4)
-    )
+    lines.extend(f"- {GRADE_NAMES[grade]}: {grade_counts[grade]}" for grade in sorted(VALID_GRADES))
+    lines.append(f"- Ungraded positive instances (Pooch25, not audit-recoverable): {ungraded_positive_count}")
     lines.extend(["", "## Marksheet case ISUP counts", ""])
     lines.extend(
         f"- ISUP {grade}: {count}" for grade, count in sorted(marksheet["case_isup"].items())
@@ -116,6 +162,18 @@ def write_report(
         f"- Fold {index}: train={len(split['train'])}, val={len(split['val'])}"
         for index, split in enumerate(splits)
     )
+    lines.extend([
+        "",
+        "## Cohort limitations",
+        "",
+        "- Grade supervision never covers the full 1,500-case (or 425-positive-case) detection-training "
+        "cohort. State this explicitly wherever weighted F1 or the confusion matrix is reported.",
+        "- GGG4 and GGG5 are small even before folding; report per-grade counts and bootstrap CIs "
+        "everywhere (Phase 6).",
+        "- Multi-component or multi-marksheet-lesion Pooch25 cases that the audit could not resolve "
+        "remain detection-positive but grade-unsupervised. This boundary is deliberate, not a gap to "
+        "close under schedule pressure.",
+    ])
     report_path.write_text("\n".join(lines) + "\n")
 
 
@@ -127,13 +185,13 @@ def main() -> None:
     parser.add_argument("--report-path", type=Path)
     args = parser.parse_args()
 
-    instance_counts, cases = validate_task(args.task_dir)
+    grade_counts, ungraded_positive_count, cases = validate_task(args.task_dir)
     splits = load_splits(args.task_dir / "splits.json")
     validate_splits(splits, cases)
     if args.plan_path:
         validate_plan(args.plan_path)
     if args.report_path:
-        write_report(args.report_path, instance_counts, args.marksheet, splits)
+        write_report(args.report_path, grade_counts, ungraded_positive_count, args.marksheet, splits)
     print("All PI-CAI M1 sanity checks passed.")
 
 

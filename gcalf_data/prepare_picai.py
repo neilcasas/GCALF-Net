@@ -1,17 +1,29 @@
-"""Build the supervised PI-CAI GGG2--5 nnDetection task and install its splits."""
+"""Build the supervised PI-CAI csPCa nnDetection task and install its splits.
+
+All 1,500 cases train csPCa detection (a single foreground class); only
+grade-resolved lesions (human_expert masks directly, plus audit-recovered
+Pooch25 cases) additionally carry GGG2-5 grade metadata for the separate
+grade head (PHASE_1_data_pipeline.md; ADR 0002 D2).
+"""
 
 import argparse
 import json
 import pickle
 import shutil
+import time
 from pathlib import Path
-from typing import Dict, Iterable, List, Set
+from typing import Dict, Iterable, List, Sequence, Set
 
-from gcalf_data.build_labels import GGG_LABELS, remap_label_images
+from picai_prep import nnunet2nndet
 
+from gcalf_data import preprocessing
+from gcalf_data.audit_unifocal import run_audit
+from gcalf_data.build_labels import inject_grade_metadata
 
-DEFAULT_TASK = "Task2201_PICAI_GGG"
+DEFAULT_TASK = "Task2201_PICAI_csPCa"
 TINY_NUM_MODALITIES = 3
+_MODALITY_SUFFIXES = ("t2w", "adc", "hbv")
+_WHOLE_GLAND_SOURCE = "Bosma22b"  # the PI-CAI maintainers' own AI segmentation; Guerbet23 also covers all 1,500 cases
 
 
 def load_splits(path: Path) -> List[Dict[str, List[str]]]:
@@ -30,73 +42,150 @@ def load_splits(path: Path) -> List[Dict[str, List[str]]]:
 def dataset_json(task: str) -> Dict[str, object]:
     return {
         "task": task,
-        "name": "PI-CAI GGG2-5 lesion detection",
-        "description": "Supervised PI-CAI csPCa lesion detection with granular expert labels.",
+        "name": "PI-CAI csPCa lesion detection",
+        "description": "Supervised PI-CAI csPCa lesion detection; GGG2-5 grade carried as instance metadata.",
         "tensorImageSize": "4D",
         "reference": "PI-CAI public training and development dataset",
         "licence": "CC BY-NC 4.0",
         "release": "1.0",
         "modality": {"0": "T2W", "1": "ADC", "2": "HBV"},
-        "labels": {"0": "background", **{str(key): value for key, value in GGG_LABELS.items()}},
+        "labels": {"0": "background", "1": "csPCa"},
     }
 
 
+def patient_id(case_id: str) -> str:
+    """Return the PI-CAI patient identifier embedded in a case identifier."""
+    return case_id.split("_", 1)[0]
+
+
+def _index_patient_dirs(images_dirs: Sequence[Path]) -> Dict[str, Path]:
+    """Map patient_id -> the fold directory containing that patient's scans."""
+    index: Dict[str, Path] = {}
+    for images_dir in images_dirs:
+        for candidate in sorted(Path(images_dir).iterdir()):
+            if not candidate.is_dir():
+                continue
+            if candidate.name in index:
+                raise ValueError(f"Patient {candidate.name} found in multiple image directories")
+            index[candidate.name] = candidate
+    return index
+
+
+def _case_image_paths(patient_dir: Path, case_id: str) -> Dict[str, Path]:
+    paths = {}
+    for suffix in _MODALITY_SUFFIXES:
+        path = patient_dir / f"{case_id}_{suffix}.mha"
+        if not path.is_file():
+            raise ValueError(f"Missing {suffix.upper()} scan for {case_id}: {path}")
+        paths[suffix] = path
+    return paths
+
+
+def _lesion_mask_path(labels_root: Path, case_id: str) -> Path:
+    delineations = labels_root / "csPCa_lesion_delineations" / "human_expert"
+    resampled = delineations / "resampled" / f"{case_id}.nii.gz"
+    if resampled.is_file():
+        return resampled
+    pooch25 = delineations / "Pooch25" / f"{case_id}.nii.gz"
+    if pooch25.is_file():
+        return pooch25
+    raise ValueError(f"No lesion mask found for {case_id} in human_expert/resampled or Pooch25")
+
+
+def _whole_gland_mask_path(labels_root: Path, case_id: str) -> Path:
+    path = labels_root / "anatomical_delineations" / "whole_gland" / "AI" / _WHOLE_GLAND_SOURCE / f"{case_id}.nii.gz"
+    if not path.is_file():
+        raise ValueError(f"No whole-gland mask found for {case_id}: {path}")
+    return path
+
+
 def build_task(
-    images_dir: Path,
+    images_dirs: Sequence[Path],
     labels_root: Path,
     task_dir: Path,
     splits_json: Path,
     work_dir: Path,
-    task_name: str,
+    task_name: str = DEFAULT_TASK,
 ) -> None:
-    """Convert the MHA archive, remap semantic labels, and create an nnDetection task."""
-    try:
-        from picai_prep import MHA2nnUNetConverter, nnunet2nndet
-        from picai_prep.examples.mha2nnunet.picai_archive import generate_mha2nnunet_settings
-    except ImportError as error:
-        raise RuntimeError("prepare_picai requires picai_prep from the M0 environment") from error
+    """Preprocess every PI-CAI case (PHASE_1_data_pipeline.md Sec 1.2) and
+    assemble the nnDetection csPCa task."""
+    import SimpleITK as sitk
 
-    annotations_dir = labels_root / "csPCa_lesion_delineations" / "human_expert" / "resampled"
-    marksheet = labels_root / "clinical_information" / "marksheet.csv"
-    if not annotations_dir.is_dir() or not marksheet.is_file():
-        raise ValueError("labels_root must be the picai_labels checkout with resampled expert masks and marksheet.csv")
+    marksheet_path = labels_root / "clinical_information" / "marksheet.csv"
+    pooch25_dir = labels_root / "csPCa_lesion_delineations" / "human_expert" / "Pooch25"
+    if not marksheet_path.is_file() or not pooch25_dir.is_dir():
+        raise ValueError("labels_root must be the picai_labels checkout")
     if task_dir.exists() and any(task_dir.iterdir()):
         raise FileExistsError(f"Refusing to merge into an existing task directory: {task_dir}")
 
     splits = load_splits(splits_json)
-    settings_path = work_dir / "mha2nnunet_settings.json"
-    nnunet_root = work_dir / "nnUNet_raw"
-    nnunet_task_dir = nnunet_root / task_name
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    case_ids = sorted({case_id for split in splits for key in ("train", "val") for case_id in split[key]})
 
-    generate_mha2nnunet_settings(
-        archive_dir=images_dir,
-        annotations_dir=annotations_dir,
-        output_path=settings_path,
-        task=task_name,
-    )
-    with settings_path.open() as file:
-        settings = json.load(file)
-    settings["dataset_json"] = dataset_json(task_name)
-    with settings_path.open("w") as file:
-        json.dump(settings, file, indent=2)
+    patient_index = _index_patient_dirs(images_dirs)
 
-    converter = MHA2nnUNetConverter(
-        scans_dir=images_dir,
-        annotations_dir=annotations_dir,
-        output_dir=nnunet_root,
-        mha2nnunet_settings=settings,
-    )
-    converter.convert()
-    converter.create_dataset_json()
+    nnunet_task_dir = Path(work_dir) / "nnUNet_raw" / task_name
+    images_out = nnunet_task_dir / "imagesTr"
+    labels_out = nnunet_task_dir / "labelsTr"
+    images_out.mkdir(parents=True, exist_ok=True)
+    labels_out.mkdir(parents=True, exist_ok=True)
 
-    remap_label_images(nnunet_task_dir / "labelsTr")
-    with (nnunet_task_dir / "splits.json").open("w") as file:
-        json.dump(splits, file, indent=2)
+    start_time = time.time()
+    total_cases = len(case_ids)
+    crop_strategy_exceptions: Dict[str, str] = {}
+    for index, case_id in enumerate(case_ids, start=1):
+        patient_dir = patient_index.get(patient_id(case_id))
+        if patient_dir is None:
+            raise ValueError(f"No image directory found for patient {patient_id(case_id)} ({case_id})")
+        image_paths = _case_image_paths(patient_dir, case_id)
+        lesion_mask_path = _lesion_mask_path(labels_root, case_id)
+        whole_gland_path = _whole_gland_mask_path(labels_root, case_id)
+
+        t2w = sitk.ReadImage(str(image_paths["t2w"]))
+        adc = sitk.ReadImage(str(image_paths["adc"]))
+        hbv = sitk.ReadImage(str(image_paths["hbv"]))
+        lesion_mask = sitk.ReadImage(str(lesion_mask_path))
+        whole_gland = sitk.ReadImage(str(whole_gland_path))
+
+        t2w, adc, hbv, lesion_mask, crop_strategy = preprocessing.preprocess_case(
+            t2w, adc, hbv, lesion_mask, whole_gland
+        )
+
+        sitk.WriteImage(t2w, str(images_out / f"{case_id}_0000.nii.gz"))
+        sitk.WriteImage(adc, str(images_out / f"{case_id}_0001.nii.gz"))
+        sitk.WriteImage(hbv, str(images_out / f"{case_id}_0002.nii.gz"))
+        sitk.WriteImage(lesion_mask, str(labels_out / f"{case_id}.nii.gz"))
+
+        elapsed = time.time() - start_time
+        eta = elapsed / index * (total_cases - index)
+        note = ""
+        if crop_strategy != "gland":
+            crop_strategy_exceptions[case_id] = crop_strategy
+            note = f" [gland-centered crop would have clipped the lesion -- used '{crop_strategy}' crop instead]"
+        print(
+            f"[{index}/{total_cases}] preprocessed {case_id} "
+            f"(elapsed {elapsed / 60:.1f} min, eta {eta / 60:.1f} min){note}",
+            flush=True,
+        )
+
+    with (nnunet_task_dir / "dataset.json").open("w") as file:
+        json.dump(dataset_json(task_name), file, indent=2)
 
     task_dir.parent.mkdir(parents=True, exist_ok=True)
     nnunet2nndet(nnunet_task_dir, task_dir)
-    shutil.copy2(nnunet_task_dir / "splits.json", task_dir / "splits.json")
+
+    audit_results = run_audit(pooch25_dir, marksheet_path)
+    inject_grade_metadata(task_dir / "raw_splitted" / "labelsTr", audit_results)
+
+    with (task_dir / "splits.json").open("w") as file:
+        json.dump(splits, file, indent=2)
+
+    with (task_dir / "crop_strategy_exceptions.json").open("w") as file:
+        json.dump(crop_strategy_exceptions, file, indent=2, sort_keys=True)
+    if crop_strategy_exceptions:
+        print(
+            f"{len(crop_strategy_exceptions)} case(s) needed a non-gland-centered crop "
+            f"(recorded in crop_strategy_exceptions.json): {crop_strategy_exceptions}"
+        )
 
 
 def install_splits(task_dir: Path, preprocessed_dir: Path) -> Path:
@@ -118,28 +207,25 @@ def install_splits(task_dir: Path, preprocessed_dir: Path) -> Path:
     return output_path
 
 
-def patient_id(case_id: str) -> str:
-    """Return the PI-CAI patient identifier embedded in a case identifier."""
-    return case_id.split("_", 1)[0]
-
-
 def _case_ids(images_dir: Path) -> List[str]:
     return sorted(path.name[:-12] for path in images_dir.glob("*_0000.nii.gz"))
 
 
-def _load_case_classes(labels_dir: Path, case_id: str) -> Set[int]:
-    label_path = labels_dir / f"{case_id}.nii.gz"
+def _load_case_grades(labels_dir: Path, case_id: str) -> Set[int]:
+    """Return the set of grade_supervised grades present for a case (empty if
+    benign or positive-but-ungraded)."""
     metadata_path = labels_dir / f"{case_id}.json"
-    if not label_path.is_file() or not metadata_path.is_file():
-        raise ValueError(f"Missing label image or instances metadata for {case_id}")
+    if not metadata_path.is_file():
+        raise ValueError(f"Missing instances metadata for {case_id}")
     with metadata_path.open() as file:
-        instances = json.load(file).get("instances")
-    if not isinstance(instances, dict):
-        raise ValueError(f"Invalid instances metadata for {case_id}")
-    try:
-        return {int(class_id) for class_id in instances.values()}
-    except (TypeError, ValueError) as error:
-        raise ValueError(f"Invalid class identifier in {metadata_path}") from error
+        metadata = json.load(file)
+    return {int(grade) for grade in metadata.get("grades", {}).values()}
+
+
+def _has_any_instance(labels_dir: Path, case_id: str) -> bool:
+    metadata_path = labels_dir / f"{case_id}.json"
+    with metadata_path.open() as file:
+        return bool(json.load(file)["instances"])
 
 
 def _validate_case_files(source_dir: Path, case_id: str) -> None:
@@ -159,34 +245,36 @@ def _select_case(candidates: Iterable[str], used_patients: Set[str], description
 
 
 def select_tiny_cases(source_task_dir: Path) -> Dict[str, List[str]]:
-    """Select the fixed six-case M3 smoke cohort from an M1 task."""
+    """Select the fixed six-case M3 smoke cohort from an M1 task: one
+    grade-supervised case per grade 2-5, one additional positive case, and one
+    benign case, all from distinct patients."""
     images_dir = source_task_dir / "raw_splitted" / "imagesTr"
     labels_dir = source_task_dir / "raw_splitted" / "labelsTr"
     case_ids = _case_ids(images_dir)
     if not case_ids:
         raise ValueError(f"No training cases found in {images_dir}")
 
-    class_by_case = {}
+    grades_by_case = {}
+    positive_by_case = {}
     for case_id in case_ids:
         _validate_case_files(source_task_dir, case_id)
-        class_by_case[case_id] = _load_case_classes(labels_dir, case_id)
+        grades_by_case[case_id] = _load_case_grades(labels_dir, case_id)
+        positive_by_case[case_id] = _has_any_instance(labels_dir, case_id)
 
     used_patients: Set[str] = set()
     representatives = []
-    for class_id in range(4):
+    for grade in (2, 3, 4, 5):
         candidates = sorted(
-            (case_id for case_id, classes in class_by_case.items() if class_id in classes),
-            key=lambda case_id: (class_by_case[case_id] != {class_id}, case_id),
+            (case_id for case_id, grades in grades_by_case.items() if grade in grades),
+            key=lambda case_id: (grades_by_case[case_id] != {grade}, case_id),
         )
-        representatives.append(_select_case(candidates, used_patients, f"GGG{class_id + 2}"))
+        representatives.append(_select_case(candidates, used_patients, f"GGG{grade}"))
 
     remaining_positive = sorted(
-        case_id
-        for case_id, classes in class_by_case.items()
-        if classes and case_id not in representatives
+        case_id for case_id in case_ids if positive_by_case[case_id] and case_id not in representatives
     )
     additional_positive = _select_case(remaining_positive, used_patients, "additional positive")
-    benign_candidates = sorted(case_id for case_id, classes in class_by_case.items() if not classes)
+    benign_candidates = sorted(case_id for case_id in case_ids if not positive_by_case[case_id])
     benign = _select_case(benign_candidates, used_patients, "benign")
 
     return {
@@ -231,7 +319,7 @@ def build_tiny_task(source_task_dir: Path, task_dir: Path) -> Dict[str, object]:
     with source_metadata_path.open() as file:
         metadata = json.load(file)
     metadata["task"] = task_dir.name
-    metadata["name"] = "PI-CAI GGG2-5 tiny M3 smoke task"
+    metadata["name"] = "PI-CAI csPCa tiny M3 smoke task"
     metadata["test_labels"] = True
     with (task_dir / "dataset.json").open("w") as file:
         json.dump(metadata, file, indent=2)
@@ -260,7 +348,10 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     build = subparsers.add_parser("build", help="build the raw nnDetection task")
-    build.add_argument("--images-dir", type=Path, required=True, help="PI-CAI public MHA archive")
+    build.add_argument(
+        "--images-dir", type=Path, required=True, action="append", dest="images_dirs",
+        help="PI-CAI public MHA fold directory (repeat for each of the 5 folds)",
+    )
     build.add_argument("--labels-root", type=Path, required=True, help="picai_labels checkout")
     build.add_argument("--task-dir", type=Path, required=True, help="target $det_data task directory")
     build.add_argument("--splits-json", type=Path, required=True, help="official picai_nnunet splits.json")
@@ -278,7 +369,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "build":
         build_task(
-            images_dir=args.images_dir,
+            images_dirs=args.images_dirs,
             labels_root=args.labels_root,
             task_dir=args.task_dir,
             splits_json=args.splits_json,

@@ -1,23 +1,29 @@
-"""Convert PI-CAI's granular csPCa labels to contiguous GGG2--5 labels."""
+"""Rework PI-CAI's csPCa labels into the single-class detection contract with
+per-instance GGG2--5 grade metadata (PHASE_1_data_pipeline.md; ADR 0002 D2/D4).
+
+Every positive lesion is nnDetection detection class 0 ("csPCa"), regardless of
+its source annotation. Grade is carried as separate per-instance metadata, never
+as the detection class, so ungraded positive lesions (Pooch25) still train the
+detector without needing a class to be assigned to.
+"""
 
 import argparse
 import csv
+import json
 from collections import Counter
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Optional, Tuple
 
+VALID_GRADES = {2, 3, 4, 5}
+GRADE_NAMES = {grade: f"GGG{grade}" for grade in VALID_GRADES}
 
-SOURCE_LABELS = {0, 2, 3, 4, 5}
-GGG_LABELS = {1: "GGG2", 2: "GGG3", 3: "GGG4", 4: "GGG5"}
-
-
-def remap_source_label(label: int) -> int:
-    """Map PI-CAI's mask value to a contiguous nnU-Net foreground value."""
-    if label == 0:
-        return 0
-    if label not in SOURCE_LABELS:
-        raise ValueError(f"Unsupported PI-CAI label value: {label}")
-    return label - 1
+# nnunet2nndet's convert_and_save_label assigns each instance a raw class of
+# (original mask label value - 1), derived from whichever raw PI-CAI mask value
+# it saw for that connected component. human_expert masks carry the grade
+# directly as the mask value (2-5, i.e. raw class 1-4); Pooch25's binary mask
+# (value 1, i.e. raw class 0) carries no grade information at all.
+_HUMAN_EXPERT_RAW_CLASS_TO_GRADE = {grade - 1: grade for grade in VALID_GRADES}  # {1:2, 2:3, 3:4, 4:5}
+_POOCH25_RAW_CLASS = 0
 
 
 def parse_lesion_isup(value: str) -> Iterable[int]:
@@ -39,47 +45,80 @@ def marksheet_summary(marksheet_path: Path) -> Dict[str, Counter]:
     return {"case_isup": case_isup, "lesion_isup": lesion_isup}
 
 
-def remap_label_images(labels_dir: Path) -> Counter:
-    """Rewrite PI-CAI masks from ``{0, 2, 3, 4, 5}`` to ``{0, 1, 2, 3, 4}``."""
-    try:
-        import numpy as np
-        import SimpleITK as sitk
-    except ImportError as error:
-        raise RuntimeError("build_labels requires numpy and SimpleITK from the M0 environment") from error
+def _grade_for_instance(
+    case_id: str, raw_class: int, audit_results: Dict[str, dict]
+) -> Tuple[Optional[int], Optional[str]]:
+    """Return (grade, grade_source) for one instance, or (None, None) if it
+    stays grade-unsupervised."""
+    if raw_class in _HUMAN_EXPERT_RAW_CLASS_TO_GRADE:
+        return _HUMAN_EXPERT_RAW_CLASS_TO_GRADE[raw_class], "human_expert_mask"
+    if raw_class == _POOCH25_RAW_CLASS:
+        audit = audit_results.get(case_id)
+        if audit and audit.get("grade_supervised"):
+            return int(audit["grade"]), "audit_unifocal"
+        return None, None
+    raise ValueError(f"{case_id}: unexpected raw instance class {raw_class}")
 
-    counts = Counter()
-    label_paths = sorted(labels_dir.glob("*.nii.gz"))
-    if not label_paths:
-        raise ValueError(f"No label images found in {labels_dir}")
 
-    for label_path in label_paths:
-        image = sitk.ReadImage(str(label_path))
-        source = sitk.GetArrayFromImage(image)
-        found = set(np.unique(source).tolist())
-        unsupported = found - SOURCE_LABELS
-        if unsupported:
-            raise ValueError(f"{label_path.name} contains unsupported labels: {sorted(unsupported)}")
+def inject_grade_metadata(labels_dir: Path, audit_results: Dict[str, dict]) -> Tuple[Counter, int]:
+    """Rewrite every raw_splitted/labelsTr/<case_id>.json in place: collapse
+    every instance's detection class to 0, and attach grade/grade_source/
+    grade_supervised metadata derived from the instance's original
+    (pre-collapse) class, per ARCHITECTURE.md's instance schema. Returns
+    (grade-supervised counts per grade, count of instances left ungraded).
+    """
+    json_paths = sorted(labels_dir.glob("*.json"))
+    if not json_paths:
+        raise ValueError(f"No instance metadata found in {labels_dir}")
 
-        remapped = np.zeros_like(source, dtype=np.uint8)
-        for source_label in sorted(SOURCE_LABELS - {0}):
-            remapped[source == source_label] = remap_source_label(source_label)
-            counts[source_label] += int((source == source_label).sum())
+    grade_counts: Counter = Counter()
+    ungraded_positive_count = 0
+    for json_path in json_paths:
+        case_id = json_path.stem
+        with json_path.open() as file:
+            metadata = json.load(file)
+        instances = metadata["instances"]
 
-        result = sitk.GetImageFromArray(remapped)
-        result.CopyInformation(image)
-        sitk.WriteImage(result, str(label_path))
-    return counts
+        new_instances: Dict[str, int] = {}
+        grades: Dict[str, int] = {}
+        grade_sources: Dict[str, str] = {}
+        grade_supervised: Dict[str, bool] = {}
+        for instance_id, raw_class in instances.items():
+            grade, grade_source = _grade_for_instance(case_id, int(raw_class), audit_results)
+            new_instances[instance_id] = 0
+            if grade is not None:
+                grades[instance_id] = grade
+                grade_sources[instance_id] = grade_source
+                grade_supervised[instance_id] = True
+                grade_counts[grade] += 1
+            else:
+                grade_supervised[instance_id] = False
+                ungraded_positive_count += 1
+
+        metadata["instances"] = new_instances
+        metadata["grades"] = grades
+        metadata["grade_sources"] = grade_sources
+        metadata["grade_supervised"] = grade_supervised
+        with json_path.open("w") as file:
+            json.dump(metadata, file, indent=2)
+
+    return grade_counts, ungraded_positive_count
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--labels-dir", type=Path, required=True, help="nnU-Net labelsTr directory")
+    parser.add_argument("--labels-dir", type=Path, required=True, help="nnDetection raw_splitted/labelsTr directory")
+    parser.add_argument("--audit-json", type=Path, required=True, help="output of audit_unifocal.py")
     parser.add_argument("--marksheet", type=Path, required=True, help="PI-CAI marksheet.csv")
     args = parser.parse_args()
 
-    voxel_counts = remap_label_images(args.labels_dir)
+    with args.audit_json.open() as file:
+        audit_results = json.load(file)
+
+    grade_counts, ungraded_positive_count = inject_grade_metadata(args.labels_dir, audit_results)
     summary = marksheet_summary(args.marksheet)
-    print("Remapped lesion-label voxels:", dict(sorted(voxel_counts.items())))
+    print("Grade-supervised instance counts:", {GRADE_NAMES[g]: c for g, c in sorted(grade_counts.items())})
+    print("Ungraded positive instances:", ungraded_positive_count)
     print("Marksheet case_ISUP distribution:", dict(sorted(summary["case_isup"].items())))
     print("Marksheet lesion_ISUP distribution:", dict(sorted(summary["lesion_isup"].items())))
 

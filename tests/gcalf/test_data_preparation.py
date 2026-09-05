@@ -4,25 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from gcalf_data.build_labels import GGG_LABELS, parse_lesion_isup, remap_source_label
 from gcalf_data.prepare_picai import build_tiny_task, dataset_json, load_splits
 
 
-def test_source_labels_are_remapped_to_contiguous_foreground_classes():
-    assert [remap_source_label(label) for label in (0, 2, 3, 4, 5)] == [0, 1, 2, 3, 4]
-    with pytest.raises(ValueError, match="Unsupported"):
-        remap_source_label(1)
-
-
-def test_dataset_metadata_describes_four_ggg_foreground_classes():
-    metadata = dataset_json("Task2201_PICAI_GGG")
+def test_dataset_metadata_declares_single_cspca_foreground_class():
+    metadata = dataset_json("Task2201_PICAI_csPCa")
     assert metadata["modality"] == {"0": "T2W", "1": "ADC", "2": "HBV"}
-    assert metadata["labels"] == {"0": "background", "1": "GGG2", "2": "GGG3", "3": "GGG4", "4": "GGG5"}
-    assert GGG_LABELS == {1: "GGG2", 2: "GGG3", 3: "GGG4", 4: "GGG5"}
-
-
-def test_marksheet_parser_ignores_ungraded_lesions():
-    assert list(parse_lesion_isup("2,N/A,4")) == [2, 4]
+    assert metadata["labels"] == {"0": "background", "1": "csPCa"}
 
 
 def test_load_splits_requires_five_train_validation_folds(tmp_path):
@@ -32,7 +20,11 @@ def test_load_splits_requires_five_train_validation_folds(tmp_path):
         load_splits(split_path)
 
 
-def _write_source_case(task_dir: Path, case_id: str, classes):
+def _write_source_case(task_dir: Path, case_id: str, grades):
+    """Write a synthetic case with one instance per entry in `grades`
+    (an int 2-5 for a grade-supervised instance, or None for an ungraded
+    positive instance). An empty list writes a benign (zero-instance) case.
+    """
     images_dir = task_dir / "raw_splitted" / "imagesTr"
     labels_dir = task_dir / "raw_splitted" / "labelsTr"
     images_dir.mkdir(parents=True, exist_ok=True)
@@ -40,8 +32,24 @@ def _write_source_case(task_dir: Path, case_id: str, classes):
     for modality in range(3):
         (images_dir / f"{case_id}_{modality:04d}.nii.gz").write_bytes(b"image")
     (labels_dir / f"{case_id}.nii.gz").write_bytes(b"label")
-    instances = {str(index): class_id for index, class_id in enumerate(classes, start=1)}
-    (labels_dir / f"{case_id}.json").write_text(json.dumps({"instances": instances}))
+
+    instance_ids = [str(index) for index in range(1, len(grades) + 1)]
+    instances = {instance_id: 0 for instance_id in instance_ids}
+    grade_by_id = {
+        instance_id: grade for instance_id, grade in zip(instance_ids, grades) if grade is not None
+    }
+    grade_supervised = {instance_id: instance_id in grade_by_id for instance_id in instance_ids}
+    grade_sources = {instance_id: "human_expert_mask" for instance_id in grade_by_id}
+    (labels_dir / f"{case_id}.json").write_text(
+        json.dumps(
+            {
+                "instances": instances,
+                "grades": grade_by_id,
+                "grade_sources": grade_sources,
+                "grade_supervised": grade_supervised,
+            }
+        )
+    )
 
 
 def _write_source_task(task_dir: Path):
@@ -49,29 +57,29 @@ def _write_source_task(task_dir: Path):
     (task_dir / "dataset.json").write_text(
         json.dumps(
             {
-                "task": "Task2201_PICAI_GGG",
+                "task": "Task2201_PICAI_csPCa",
                 "name": "source",
                 "dim": 3,
                 "modalities": {"0": "T2W", "1": "ADC", "2": "HBV"},
-                "labels": {"0": "GGG2", "1": "GGG3", "2": "GGG4", "3": "GGG5"},
+                "labels": {"0": "csPCa"},
             }
         )
     )
-    for class_id in range(4):
-        _write_source_case(task_dir, f"1000{class_id}_100000{class_id}", [class_id])
-    _write_source_case(task_dir, "10004_1000004", [0])
-    _write_source_case(task_dir, "10005_1000005", [])
+    for grade in (2, 3, 4, 5):
+        _write_source_case(task_dir, f"1000{grade}_100000{grade}", [grade])
+    _write_source_case(task_dir, "10006_1000006", [None])  # ungraded positive (unresolved Pooch25)
+    _write_source_case(task_dir, "10007_1000007", [])  # benign
 
 
 def test_build_tiny_task_creates_fixed_holdout_alias_and_split(tmp_path):
-    source = tmp_path / "Task2201_PICAI_GGG"
+    source = tmp_path / "Task2201_PICAI_csPCa"
     target = tmp_path / "Task900_PICAI_TINY"
     _write_source_task(source)
 
     manifest = build_tiny_task(source, target)
 
-    assert manifest["train_cases"] == [f"1000{class_id}_100000{class_id}" for class_id in range(4)]
-    assert manifest["validation_cases"] == ["10004_1000004", "10005_1000005"]
+    assert manifest["train_cases"] == [f"1000{grade}_100000{grade}" for grade in (2, 3, 4, 5)]
+    assert manifest["validation_cases"] == ["10006_1000006", "10007_1000007"]
     assert manifest["test_cases"] == manifest["validation_cases"]
     metadata = json.loads((target / "dataset.json").read_text())
     assert metadata["task"] == "Task900_PICAI_TINY"
@@ -84,10 +92,12 @@ def test_build_tiny_task_creates_fixed_holdout_alias_and_split(tmp_path):
 
 
 def test_build_tiny_task_rejects_missing_grade_and_existing_target(tmp_path):
-    source = tmp_path / "Task2201_PICAI_GGG"
+    source = tmp_path / "Task2201_PICAI_csPCa"
     _write_source_task(source)
-    missing_grade = source / "raw_splitted" / "labelsTr" / "10003_1000003.json"
-    missing_grade.write_text(json.dumps({"instances": {}}))
+    missing_grade = source / "raw_splitted" / "labelsTr" / "10005_1000005.json"
+    missing_grade.write_text(
+        json.dumps({"instances": {}, "grades": {}, "grade_sources": {}, "grade_supervised": {}})
+    )
     with pytest.raises(ValueError, match="GGG5"):
         build_tiny_task(source, tmp_path / "Task900_PICAI_TINY")
 
