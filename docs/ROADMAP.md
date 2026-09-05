@@ -1,132 +1,206 @@
 # GCALF-Net Roadmap
 
-`SPEC.md` says *what* GCALF-Net is. This file says *when it is done*: the spec split into 11 milestones, each with one goal and one test that decides pass/fail. The step-by-step *how* stays in `phases/PHASE_*.md` — this is the ledger, not a third copy of the plan.
+`ARCHITECTURE.md` says *what* GCALF-Net is and *why*. This file says *when it is done*: the
+architecture split into milestones, each with one goal and one test that decides pass/fail. The
+step-by-step *how* is in `phases/PHASE_*.md`.
 
-**Rules.** Milestones are sequential; M4 (full baseline) must close before M5 (LFF) starts. A milestone closes only when its test runs and passes — not when the code "looks right". Every test below is a command or an assertion, never a judgement call. Tick the box, record the tagged commit, move on.
+**Rules.** Milestones are sequential; M4 (built baseline, full train) must close before M6 (LFF)
+or M7 (CAF) starts. A milestone closes only when its test runs and passes — not when the code
+"looks right." Every gate below is tagged **L** (runs in the pinned `gcalf:m0` image, CPU-only) or
+**V** (requires a GPU — Vast.ai). No **V** gate is evidence for a milestone whose **L** gate has
+not passed. See `docs/adr/0002-*.md` for why each milestone is shaped this way.
 
-| M | Milestone | Phase | Goal (one sentence) |
-|---|---|---|---|
-| M0 | Environment | [0](phases/PHASE_0_environment.md) | One reproducible env where `nndet`, PI-CAI tools and medcam all import |
-| M1 | Data pipeline | [1](phases/PHASE_1_data_pipeline.md) | A validated nnDetection task with 3-channel bpMRI and per-lesion GGG2--5 labels |
-| M2 | Baseline forward | [2](phases/PHASE_2_baseline.md) | The adapted 3-channel model builds, runs, and can memorize 2 cases |
-| M3 | Baseline tiny train | [2](phases/PHASE_2_baseline.md) | Train→predict→eval works end-to-end on a 6-case task |
-| M4 ⭐ | Baseline full train | [2](phases/PHASE_2_baseline.md) | Real baseline numbers on PI-CAI — the thesis's first result |
-| M5 | LFF | [3](phases/PHASE_3_lff.md) | Learnable 3D Fourier filter replaces the wavelet module, baseline-invariant |
-| M6 | CAF | [4](phases/PHASE_4_caf.md) | Bidirectional windowed Q/K/V cross-attention replaces channel-light fusion |
-| M7 | Full GCALF + ablation | [5](phases/PHASE_5_integration_ablation.md) | All four configs run on identical folds/seeds |
-| M8 | Evaluation | [6](phases/PHASE_6_evaluation.md) | Detection + 5-class metrics + significance test for every config |
-| M9 | Grad-CAM | [7](phases/PHASE_7_gradcam.md) | 3D CAMs wired to the right class/layer, blinded packets exported |
-| M10 | Thesis outputs | [6](phases/PHASE_6_evaluation.md), [7](phases/PHASE_7_gradcam.md) | Every SOP answered by a named table or figure |
+| M | Milestone | Phase | Goal | Gates |
+|---|---|---|---|---|
+| M0 | Environment | [0](phases/PHASE_0_environment.md) | `nndet`, PI-CAI tools, medcam all import; CUDA build verified | L, V |
+| M1 | Data pipeline | [1](phases/PHASE_1_data_pipeline.md) | Validated task: `csPCa` detection class (1,500 cases) + grade metadata (220+ audited lesions) | L |
+| M2 | Baseline build (FDR + WAF) | [2](phases/PHASE_2_baseline.md) | FDR built, WAF wired, replacing the released wavelet/channel-light modules | L, V |
+| M3 | Baseline forward + overfit | [2](phases/PHASE_2_baseline.md) | Grade head loss routing correct; 2-case overfit drives loss to ~0 | L, V |
+| M4 ⭐ | Baseline full train | [2](phases/PHASE_2_baseline.md) | Real FDR+WAF baseline numbers on PI-CAI — thesis's first result | V |
+| M5 | Budget ladder decision | [2](phases/PHASE_2_baseline.md) | Fold-0 pilot measurement selects a pre-committed matrix rung | V |
+| M6 | LFF | [3](phases/PHASE_3_lff.md) | Learned real-valued gain replaces FDR's fixed mask, baseline-invariant | L, V |
+| M7 | CAF | [4](phases/PHASE_4_caf.md) | Bidirectional windowed Q/K/V replaces WAF's self-attention | L, V |
+| M8 | Full GCALF + ablation matrix | [5](phases/PHASE_5_integration_ablation.md) | All four configs run on identical folds/seeds | V |
+| M9 | Evaluation | [6](phases/PHASE_6_evaluation.md) | Detection + grade metrics + defended stats + bootstrap CIs, every config | L, V |
+| M10 | Grad-CAM | [7](phases/PHASE_7_gradcam.md) | 3D CAMs on the grade head, blinded urologist packets exported | L, V |
+| M11 | Thesis outputs | [6](phases/PHASE_6_evaluation.md), [7](phases/PHASE_7_gradcam.md) | Every SOP answered by a named table or figure | — |
 
 ---
 
 ## M0 — Environment
 
-**Goal.** A single pinned environment (Python 3.8, torch 1.10.1/CUDA 11.3, nnDetection `csrc` compiled) in which every dependency of the thesis imports, plus the empty `gcalf/` code tree committed.
+**Goal.** Two environments per `ARCHITECTURE.md §12`: the pinned `gcalf:m0` image (Python 3.8,
+torch 1.10.1/CUDA 11.3, `nndet` `csrc` compiled) where every reported result must reproduce, and a
+disposable modern-CUDA scratch environment for LFF/CAF math prototyping on the local GPU. Neither
+substitutes for the other.
 
-**Test.**
+**L gate.**
 ```bash
-python -m pytest -q tests/test_imports.py tests/test_encoder_cpu.py tests/test_csrc_cuda.py
-python -c "import nndet, nndet._C; print(nndet.__file__)"     # must resolve inside GCALF-Net/, not PDHD-Net/
+python -m pytest -q tests/test_imports.py tests/test_encoder_cpu.py
+python -c "import nndet, nndet._C; print(nndet.__file__)"     # resolves inside GCALF-Net/, not PDHD-Net/
 python -c "import picai_prep, picai_eval, medcam"
 ```
-**Closes when.** The tests run in the GPU Docker container (the CUDA test does not skip), and `environment.yml` + `env.lock.txt` are committed on `feat/env-and-data`.
-**Blocks.** Everything. Do not start M1 with a half-working env — `csrc` is the #1 blocker (`SPEC.md §14`).
+**V gate.**
+```bash
+docker run --rm --gpus all gcalf:m0 python -m pytest -q tests/test_csrc_cuda.py   # must run, not skip
+```
+This has never passed (`docs/m0-verification.md` records the Docker/CDI failure that blocked it).
+Re-run it before trusting any downstream CUDA result.
+**Blocks.** Everything. `csrc` is the #1 historical blocker — do not start M1 with a half-working env.
 
 ## M1 — Data pipeline
 
-**Goal.** `Task2201_PICAI_GGG/` populated from PI-CAI's 1,295-case granular-annotation cohort with
-three co-registered modalities per case, per-lesion GGG2--5 stored as 0-indexed foreground classes
-(`ISUP 2..5 → class 0..3`), ISUP 0/1 cases carrying `"instances": {}`, and the official 5-fold
-splits loaded.
+**Goal.** A task with one `csPCa` detection foreground class over all 1,500 cases, and grade
+metadata (`grade`, `grade_source`, `grade_supervised`) on every positive instance — 220 baseline
+graded lesions plus whatever the unifocal linkage recovery audit (Phase 1) adds from the 205
+Pooch25 cases. Official 5-fold splits loaded and independently verified.
 
-**Test.**
+**Known gap.** `gcalf_data/{build_labels,prepare_picai,sanity_checks}.py` currently implement the
+rejected native-4-class design (ADR 0002 D2's rejected alternative). They need real rework, not a
+patch — see Phase 1 for the scope.
+
+**L gate.**
 ```bash
 python -m gcalf_data.sanity_checks    # all asserts green
 ```
-covering: identical spacing/orientation across T2W/ADC/HBV; channel order `_0000/_0001/_0002`; every
-instance class ∈ {0..3}; instance-volume ids == `case.json` keys; no `patient_id` crosses folds.
+covering: identical spacing/orientation across T2W/ADC/HBV after resampling to a common grid;
+`dataset.json["labels"] == {"0": "csPCa"}`; every instance's detection class is `0`; every graded
+instance's `grade ∈ {2,3,4,5}`; instance-volume IDs == `case.json` keys; no `patient_id` crosses
+folds; every held-out fold contains every grade.
+**Closes when.** Sanity checks pass, the linkage-recovery audit report is committed, and
+`docs/data_report.md` records the final grade-supervised lesion count per grade.
+**Watch.** Any GGG1 (ISUP 1) foreground detection instance, or any grade assigned by inference
+rather than the audit's 1-lesion/1-component rule, means the labels were fabricated — fix the
+data, never the plan.
 
-**Closes when.** Sanity checks pass, `nndet_prep` emits a plan with `in_channels=3` and `classifier_classes=4`, and `docs/data_report.md` records the cohort and label decisions.
-**Watch.** Any GGG1 or benign foreground class means the labels were fabricated — fix the data, never the plan.
+## M2 — Baseline build: FDR + WAF
 
-## M2 — Baseline forward pass
+**Goal.** Build the fixed FFT frequency decomposition (FDR) and wire the existing (but dead)
+`WindowAttentionFusion` (WAF) as the frozen control, per `ARCHITECTURE.md §5, §7`. This is new
+code, not a config flag — treat it as the largest single engineering item in the plan.
 
-**Goal.** The unmodified released architecture (`wavelet` + `channel_light`) instantiates from the M1 plan at 3 channels and trains at all.
+**L gate.** `pytest tests/gcalf/test_fdr.py tests/gcalf/test_waf.py` — mask radius exact,
+low/high split reconstructs the input losslessly, orientation gates pass (constant → low branch,
+Nyquist checkerboard → high branch), WAF shape/gradient tests pass, CPU forward/backward through
+the full encoder at `(1,3,32,256,256)`.
+**V gate.** CUDA forward/backward parity with the CPU result; peak memory at stages `[1,3,4]`
+(FDR) and `[2,5]` (WAF) recorded.
+**Closes when.** Both modules pass their tests and are wired as the `baseline` config's default.
 
-**Test.** Forward `(1,3,D,H,W)` through `RetinaUNetV001` with no shape error, shapes matching `SPEC.md §5`; then **overfit 2 cases** and assert training loss → ~0.
-**Closes when.** The overfit run drives loss to near zero. This is the only test that proves labels, loss and head are wired together — a model that cannot memorize 2 cases is broken, not undertrained.
+## M3 — Baseline forward pass + grade-head overfit
 
-## M3 — Baseline tiny train
+**Goal.** The two-head model (detection + masked grade head, `ARCHITECTURE.md §8`) instantiates,
+forward-passes, and — critically — the grade head's masked loss routing is provably correct.
 
-**Goal.** The whole pipeline — prep → train → predict → eval — executes unattended on `Task9xx_PICAI_TINY` (4–6 cases, mixed grades + 1 benign).
-
-**Test.** 2-epoch run under `nndet/conf/train/smoke.yaml` → `scripts/predict.py` → `gcalf_eval/run_eval.py` produces a populated `metrics.csv`.
-**Closes when.** Numbers exist. Their *value* is meaningless here — this milestone tests plumbing, not accuracy.
+**L gate.** Forward `(1,3,32,256,256)` with no shape error. **Overfit 2 real cases** (one
+grade-supervised positive, one benign): assert final loss ≤10% of initial, the positive's grade
+logit matches its label at ≥0.9 probability, the benign case contributes zero grade-head gradient
+(assert directly on `grade_head` parameter grads after a benign-only batch).
+**V gate.** Same overfit on GPU; confirm no numerical divergence under `precision: 16`.
+**Closes when.** The overfit gate passes. This is the single test that proves the masked loss
+routing works — a model that cannot memorize 2 cases, or that leaks gradient into the grade head
+from an unsupervised lesion, is broken, not undertrained.
 
 ## M4 ⭐ — Baseline full train
 
-**Goal.** The adapted 3-channel PDHD-Net trained on real PI-CAI folds at the shipped schedule (50 epochs × 2500 batches + 10 SWA), evaluated, and reported. **This is the reference column every later result is measured against.**
+**Goal.** FDR+WAF baseline trained on real PI-CAI folds at the shipped schedule (50 epochs × 2500
+batches + 10 SWA), evaluated, reported. **This is the reference column every later result is
+measured against**, and it is the paper's architecture adapted to 3-channel bpMRI — not the
+released `WaveletSpatialFusion`/`ChannelWiseLightFusion` code (ADR 0002 D4). State that plainly in
+the thesis.
 
-**Test.** `gcalf_experiments/baseline_*/metrics.csv` contains FROC, 5×5 confusion matrix, macro-F1 and per-class sensitivity; fold-0 measured **seconds/step and wall time** recorded.
-**Closes when.** Baseline metrics reported and commit tagged `baseline-v1`.
-**Gate.** The fold-0 pilot number selects one of the three pre-committed budget options (`SPEC.md §12`) — **choose and record before launching the matrix**, never after seeing results.
+**V gate.** `gcalf_experiments/baseline_*/metrics.csv` contains FROC, case-level AUROC, the 4×4
+grade confusion matrix (grade-supervised lesions only) with misses/FPs reported alongside,
+weighted F1, per-grade sensitivity; fold-0 measured seconds/step and wall time recorded.
+**Closes when.** Baseline metrics reported, commit tagged `baseline-v1`.
+**Gate → M5.** Do not launch the 20-run matrix from this milestone's numbers alone — M5 decides
+the ladder rung first.
 
-## M5 — LFF
+## M5 — Budget ladder decision
 
-**Goal.** `LearnableFrequencyFilter3D` replaces `WaveletSpatialFusion` at stages [1,3,4] via the registry, with the wavelet path still the default so the refactor cannot move the baseline.
+**Goal.** Turn the fold-0 pilot's measured seconds/step into a committed matrix plan, per
+`ARCHITECTURE.md §9` and ADR 0002 D10 (planned rung: full 20-run matrix, $150–350 budget).
 
-**Test.** `pytest tests/gcalf/test_lff.py` — shape in == shape out across several `(D,H,W)`; identity at init (`delta_H=0`, `allclose` atol 1e-4); gradients reach `delta_weight`; **a centre-weighted grid low-passes** (constant survives, Nyquist checkerboard is suppressed — this is the test that catches a missing `ifftshift`); finite under autocast on CPU and CUDA. Plus a fixed-seed regression test proving baseline output is byte-identical after the registry refactor.
-**Closes when.** Tests pass, `lff_only` completes tiny train/resume/predict/eval, per-stage peak memory recorded.
+**V gate.** Record, before any other fold starts: measured seconds/step, projected full-matrix
+GPU-hours and cost, and which of the three pre-committed rungs (full / halved batches-per-epoch,
+all runs / 14-run reduced) is selected. This record is written into every subsequent `run.json` —
+choosing after seeing fold results is test-set tuning.
+**Closes when.** The rung is recorded and unanimous across all subsequent run configs.
 
-## M6 — CAF
+## M6 — LFF
 
-**Goal.** `WindowedCrossAttentionFusion3D` replaces `MemoryEfficientFusion` at stages [2,5] with genuine bidirectional cross-attention — CNN queries Swin, Swin queries CNN.
+**Goal.** `LearnableFrequencyFilter3D` replaces FDR at stages `[1,3,4]` via the registry; FDR
+remains the default so the refactor cannot move the baseline.
 
-**Test.** `pytest tests/gcalf/test_caf.py` — output shape matches CNN dims for divisible *and* padded shapes; **padding invariance** (refilling the padded region with a different constant leaves the valid region unchanged — fails if `key_padding_mask` is missing); **residual counted once** (zero attention outputs + identity `out_proj` ⟹ output == aligned CNN feature, not a multiple of it); both branch projections receive gradients; stage-2 and stage-5 tensors pass the declared memory gate.
-**Closes when.** Tests pass and `caf_only` completes tiny train/resume/predict/eval.
-**Watch.** If windowed attention will not fit, walk the documented fallback ladder and report the resolved architecture. BiFusion is never relabeled CAF.
+**L gate.** `pytest tests/gcalf/test_lff.py` — shape in==out; identity at init (`delta_H=0`); the
+**orientation gate** (centre-weighted grid low-passes: constant survives, Nyquist checkerboard is
+suppressed — catches a missing `ifftshift`); gradients reach `delta_weight`; finite under autocast
+on CPU. Plus a fixed-seed regression test proving the FDR baseline's output is byte-identical
+after the registry refactor.
+**V gate.** Finite gradients and stable logging on one short CUDA run; per-stage peak memory
+recorded.
+**Closes when.** Tests pass; `lff_only` completes tiny train/resume/predict/eval.
 
-## M7 — Full GCALF-Net + ablation matrix
+## M7 — CAF
 
-**Goal.** Both modifications on together, then all four configs (`baseline`, `lff_only`, `caf_only`, `gcalf_full`) trained on the **same folds and seeds** — pure config work, no new model code.
+**Goal.** `WindowedCrossAttentionFusion3D` replaces WAF at stages `[2,5]` with genuine
+bidirectional cross-attention (CNN queries Swin, Swin queries CNN) in place of WAF's
+self-attention.
 
-**Test.** `gcalf_eval/collect_results.py` emits one table, rows = 4 configs, with the baseline as reference column and Δ per metric; each run dir carries `config_snapshot.yaml`, `git_commit.txt`, `env.txt`.
-**Closes when.** The four-way table exists and every run's config snapshot differs only in the two module flags.
-**Invariant.** Never drop folds for some configs only — that breaks the paired statistics in M8.
+**L gate.** `pytest tests/gcalf/test_caf.py` — output shape matches CNN dims for divisible and
+padded shapes; padding invariance (fails without `key_padding_mask`); residual counted exactly
+once (zero attention outputs + identity `out_proj` ⟹ output == aligned CNN feature, not a multiple
+of it); both branch projections receive gradients.
+**V gate.** Stage-2/stage-5 tensors pass the declared memory gate; short CUDA training segment
+with finite losses.
+**Closes when.** Tests pass; `caf_only` completes tiny train/resume/predict/eval.
+**Watch.** If windowed attention will not fit, walk the fallback ladder (`ARCHITECTURE.md §7`)
+and report the resolved architecture. BiFusion is never relabeled CAF.
 
-## M8 — Evaluation & statistics
+## M8 — Full GCALF-Net + ablation matrix
 
-**Goal.** Every config scored on detection (picai_eval FROC/AUROC) and 5-class GGG classification, with the significance test that answers SOP 3.
+**Goal.** Both modifications on together, then all four configs (`baseline`, `lff_only`,
+`caf_only`, `gcalf_full`) trained on the same folds/seeds at the M5-committed rung — pure config
+work, no new model code.
 
-**Test.** Per config: 5×5 confusion matrix over matched lesions with misses and false positives reported *beside* it (never as a 6th row), macro-F1, balanced accuracy, per-class sensitivity (**GGG2 vs GGG3 is the headline**), quadratic-weighted κ, bootstrap 95% CIs. Across configs: **Wilcoxon signed-rank on paired per-fold metrics**, GCALF-full vs baseline, p-value reported.
-**Closes when.** Comparison table, confusion-matrix figures and FROC curves are all regenerable by one script.
+**V gate.** `gcalf_eval/collect_results.py` emits one table, rows = 4 configs, baseline as
+reference column with Δ per metric; each run directory carries `config_snapshot.yaml`,
+`git_commit.txt`, `env.txt`; re-running `baseline.yaml` after the registry refactor matches
+`baseline-v1` exactly (a drifted baseline invalidates the whole comparison — check this before
+trusting any ablation result).
+**Closes when.** The four-way table exists and no fold was dropped for only some configs.
 
-## M9 — Grad-CAM
+## M9 — Evaluation & statistics
 
-**Goal.** 3D CAMs from `medcam.inject`, attached to the classifier layer and the correct target class, rendered into blinded per-case packets for the three urologists.
+**Goal.** Detection + grade metrics for every config, the defended significance test, and
+patient-level bootstrap CIs (ADR 0002 D7 — both, not one instead of the other).
 
-**Test.** `pytest tests/test_gradcam.py` — CAM is non-empty and matches input spatial shape; CAM **changes when `label` changes** (not constant across classes); spatial argmax falls inside the lesion mask for a known strong positive (or `medcam.evaluate` overlap > chance); injected model's forward output is unchanged vs un-injected.
-**Closes when.** Tests pass and blinded PNG packets (3 slices × 3 sequences, no GT/prediction visible) are exported.
-**Note.** If per-anchor logits make the detection head awkward, run the CAM study on the classifier-fallback model (`SPEC.md §14`) — its clean `(B, num_classes)` output is the recommended path.
+**L gate.** Metric and statistical-decision-tree tests on fixed synthetic fixtures, covering every
+branch (normal → ANOVA/Tukey; non-normal → Friedman/Wilcoxon).
+**V gate.** Evaluate each completed fold; aggregate only after the full matrix is present; compute
+paired bootstrap CIs from preserved out-of-fold predictions.
+**Closes when.** Weighted F1 (primary), macro-F1, per-grade sensitivity/precision, quadratic
+Cohen's κ, FROC, case-level AUROC, the defended p-value, and bootstrap CIs are all reported per
+config, with the detection and grade-matched denominators shown side by side (never collapsed).
 
-## M10 — Thesis outputs
+## M10 — Grad-CAM
 
-**Goal.** Every SOP is answered by a specific, named artifact.
+**Goal.** 3D Grad-CAM on the frozen full GCALF-Net's grade head (`ARCHITECTURE.md §11`), blinded
+review packets for 3 urologists, 30 cases stratified across GGG2–5.
 
-**Test.** Each row below points at a file that exists:
+**L gate.** Hook/target/shape test on synthetic tensors; rendered overlay pipeline runs
+end-to-end on a synthetic case.
+**V gate.** Held-out inference on real cases; export of the approved, blinded review set.
+**Closes when.** CAMs localize to matched lesions on known positives; packets + rating sheets are
+in urologists' hands. **Start recruiting the three urologists at M0** — they are the only
+dependency outside this team's control and they sit at the end of the chain.
 
-| SOP | Answered by |
-|---|---|
-| SOP 1 — adapted PDHD-Net baseline | M4 baseline metrics table |
-| SOP 2 — LFF / CAF contribution | M7 four-way ablation table |
-| SOP 3 — combined significance | M8 Wilcoxon p-value |
-| SOP 4 — clinical interpretability | M9 urologist Likert results |
+## M11 — Thesis outputs
 
-**Closes when.** All four rows resolve, and the ablation plots, confusion matrices and CAM figures are exported at thesis quality.
+**Goal.** Every SOP answered by a named table or figure; reproducibility audit complete.
 
----
-
-## Contingency
-
-If detection plumbing blocks progress past M2–M3, switch to the **classifier-fallback model** (`SPEC.md §14`): `Encoder` (LFF/CAF swaps intact) + global pool + linear GGG head on `case_ISUP`. Every milestone from M5 onward still closes on its own test — the four-way ablation and the Grad-CAM study survive untouched. Only FROC and Dice are lost, and they become "additional results if detection works."
+**Closes when.** Each run is linked to its code revision, environment, dataset-manifest version,
+fold, preprocessing config, seed, checkpoints, predictions, metrics, and statistical outputs.
+Patient data, derived imaging, checkpoints, and experiment artifacts stay out of git. Every
+blocked or amended protocol requirement (this roadmap's own amendments included) is recorded
+explicitly in the thesis, not silently absorbed.
