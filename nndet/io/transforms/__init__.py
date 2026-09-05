@@ -4,6 +4,7 @@ from nndet.io.transforms.base import (
     )
 from nndet.io.transforms.instances import (
     Instances2Boxes,
+    Instances2Grades,
     Instances2Segmentation,
     FindInstances,
 )

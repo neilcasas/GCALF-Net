@@ -68,6 +68,7 @@ from nndet.inference.ensembler.detection import BoxEnsemblerSelective
 from nndet.io.transforms import (
     Compose,
     Instances2Boxes,
+    Instances2Grades,
     Instances2Segmentation,
     FindInstances,
     )
@@ -144,6 +145,12 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                 class_key="classes",
                 present_instances="present_instances",
                 ),
+            Instances2Grades(
+                properties_key="properties",
+                present_instances="present_instances",
+                grade_key="grades",
+                grade_supervised_key="grade_supervised",
+                ),
             Instances2Segmentation(
                 instance_key="target",
                 map_key="instance_mapping",
@@ -174,7 +181,13 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             targets={
                 "target_boxes": batch["boxes"],
                 "target_classes": batch["classes"],
-                "target_seg": batch['target'][:, 0]  # Remove channel dimension
+                "target_seg": batch['target'][:, 0],  # Remove channel dimension
+                "target_grades": batch["grades"],
+                "target_grade_supervised": batch["grade_supervised"],
+                # Per-fold inverse-frequency weights (ARCHITECTURE.md Sec 8);
+                # None until fold-wise derivation is wired up, which grade_loss
+                # treats as unweighted cross-entropy.
+                "grade_class_weights": getattr(self, "grade_class_weights", None),
                 },
             evaluation=False,
             batch_num=batch_idx,
@@ -193,7 +206,10 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             targets = {
                     "target_boxes": batch["boxes"],
                     "target_classes": batch["classes"],
-                    "target_seg": batch['target'][:, 0]  # Remove channel dimension
+                    "target_seg": batch['target'][:, 0],  # Remove channel dimension
+                    "target_grades": batch["grades"],
+                    "target_grade_supervised": batch["grade_supervised"],
+                    "grade_class_weights": getattr(self, "grade_class_weights", None),
                 }
             losses, prediction = self.model.train_step(
                 images=batch["data"],

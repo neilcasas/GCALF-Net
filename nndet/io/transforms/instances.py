@@ -212,6 +212,89 @@ def get_instance_class_from_properties_seq(
     return classes
 
 
+def get_instance_grade_from_properties(
+        instance_idx: torch.Tensor,
+        grades: Dict[str, int],
+        grade_supervised: Dict[str, bool],
+        ) -> Tuple[Tensor, Tensor]:
+    """
+    Extract instance grade + grade_supervised flag from mapping dicts
+    (ARCHITECTURE.md Sec 3, Sec 8).
+
+    Unlike :func:`get_instance_class_from_properties`, this tolerates both
+    dicts being incomplete or absent entirely: `grades` only has an entry for
+    grade_supervised instances even on a fully GCALF-migrated task (ARCHITECTURE.md
+    Sec 3: ungraded positives -- Pooch25/Bosma22a binary masks -- carry no
+    grade at all), and on any *other* task in this repository (the various
+    projects/Task0XX_* detection tasks this fork also trains) neither key
+    exists in properties at all. A missing entry -- whether one instance or
+    the whole case -- defaults to grade_supervised=False, which grade_loss's
+    masking (nndet/arch/encoder/gcalf/grade_head.py) then correctly excludes
+    from the loss; it must never read the paired placeholder grade value.
+
+    Args:
+        instance_idx: instance ids present in segmentation
+        grades: dict mapping instance ids (keys) to GGG2-5 grade, present
+            only for grade_supervised instances (possibly empty/absent)
+        grade_supervised: dict mapping instance ids (keys) to whether that
+            instance's grade is trustworthy (possibly empty/absent)
+
+    Returns:
+        Tensor: extracted grade per instance (long)
+        Tensor: extracted grade_supervised flag per instance (bool)
+    """
+    _grades = {int(k): int(v) for k, v in grades.items()}
+    _supervised = {int(k): bool(v) for k, v in grade_supervised.items()}
+    ids = [int(idx.detach().item()) for idx in instance_idx]
+    grade_values = [_grades.get(i, 0) for i in ids]
+    supervised_values = [_supervised.get(i, False) for i in ids]
+    return (
+        torch.tensor(grade_values, dtype=torch.long, device=instance_idx.device),
+        torch.tensor(supervised_values, dtype=torch.bool, device=instance_idx.device),
+    )
+
+
+class Instances2Grades(AbstractTransform):
+    def __init__(self, properties_key: str, present_instances: str,
+                 grade_key: str, grade_supervised_key: str, grad: bool = False,
+                 **kwargs):
+        """
+        Extract per-instance grade + grade_supervised, aligned with
+        Instances2Boxes's target_classes ordering (ARCHITECTURE.md Sec 8).
+
+        Args:
+            properties_key: key where per-case properties dicts are located
+                (List[dict], each with "grades"/"grade_supervised" -- see
+                gcalf_data/build_labels.py)
+            present_instances: key where precomputed present instances are
+                saved (FindInstances) -- reused, not recomputed, so ordering
+                matches Instances2Boxes's target_classes exactly
+            grade_key: key where extracted grades should be saved
+            grade_supervised_key: key where extracted grade_supervised flags
+                should be saved
+            grad: enable gradient computation inside transformation
+        """
+        super().__init__(grad=grad, **kwargs)
+        self.properties_key = properties_key
+        self.present_instances = present_instances
+        self.grade_key = grade_key
+        self.grade_supervised_key = grade_supervised_key
+
+    def forward(self, **data) -> dict:
+        data[self.grade_key] = []
+        data[self.grade_supervised_key] = []
+        for batch_idx, instance_idx in enumerate(data[self.present_instances]):
+            properties = data[self.properties_key][batch_idx]
+            grades, grade_supervised = get_instance_grade_from_properties(
+                instance_idx,
+                properties.get("grades", {}),
+                properties.get("grade_supervised", {}),
+            )
+            data[self.grade_key].append(grades)
+            data[self.grade_supervised_key].append(grade_supervised)
+        return data
+
+
 class Instances2Segmentation(AbstractTransform):
     def __init__(self, instance_key: str, map_key: str, seg_key: str = None,
                  add_background: bool = True, grad: bool = False,
