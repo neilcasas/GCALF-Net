@@ -51,6 +51,8 @@ from nndet.arch.heads.classifier import ClassifierType, CEClassifier, FocalClass
 from nndet.arch.heads.regressor import RegressorType, L1Regressor, MedicalSmallTargetRegressor
 from nndet.arch.heads.comb import HeadType, DetectionHeadHNM
 from nndet.arch.heads.segmenter import SegmenterType, DiCESegmenter
+from nndet.arch.heads.grade_classifier import GradeAnchorFeatureExtractor, GradeClassifierHead
+from nndet.arch.encoder.gcalf.grade_head import GradeHead
 
 from nndet.training.optimizer import get_params_no_wd_on_norm
 from nndet.training.learning_rate import LinearWarmupPolyLR
@@ -460,6 +462,11 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             model_cfg=model_cfg,
             anchor_generator=anchor_generator,
         )
+        grade_head = cls._build_grade_head(
+            plan_arch=plan_arch,
+            model_cfg=model_cfg,
+            anchor_generator=anchor_generator,
+        )
         head = cls._build_head(
             plan_arch=plan_arch,
             model_cfg=model_cfg,
@@ -503,6 +510,7 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             topk_candidates=topk_candidates,
             remove_small_boxes=remove_small_boxes,
             nms_thresh=nms_thresh,
+            grade_head=grade_head,
         )
 
     @classmethod
@@ -632,6 +640,43 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             **kwargs,
         )
         return regressor
+
+    @classmethod
+    def _build_grade_head(
+        cls,
+        plan_arch: dict,
+        model_cfg: dict,
+        anchor_generator: AnchorGeneratorType,
+    ) -> Any:
+        """
+        Build the optional masked GGG2-5 grade head (ARCHITECTURE.md Sec 8),
+        parallel to (not replacing) the anchor classifier. Opt-in: returns
+        None, and BaseRetinaNet computes no grade logits and no grade loss,
+        unless model_cfg declares `head_grade_kwargs`.
+
+        Args:
+            plan_arch: architecture settings
+            model_cfg: additional architecture settings
+            anchor_generator: anchor generator instance
+
+        Returns:
+            Optional[GradeClassifierHead]: grade head instance, or None
+        """
+        kwargs = model_cfg.get('head_grade_kwargs')
+        if kwargs is None:
+            return None
+
+        conv = Generator(cls.head_conv_cls, plan_arch["dim"])
+        logger.info(f"Building:: grade head GradeClassifierHead: {kwargs}")
+        feature_extractor = GradeAnchorFeatureExtractor(
+            conv=conv,
+            in_channels=plan_arch["fpn_channels"],
+            internal_channels=plan_arch["head_channels"],
+            anchors_per_pos=anchor_generator.num_anchors_per_location()[0],
+            num_levels=len(plan_arch["decoder_levels"]),
+            **kwargs,
+        )
+        return GradeClassifierHead(feature_extractor, GradeHead(plan_arch["head_channels"]))
 
     @classmethod
     def _build_head(

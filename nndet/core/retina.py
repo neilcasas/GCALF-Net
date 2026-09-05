@@ -20,6 +20,7 @@ from nndet.arch.decoder.base import DecoderType
 from nndet.arch.heads.segmenter import SegmenterType
 from nndet.arch.heads.comb import HeadType
 from nndet.core.boxes.anchors import AnchorGeneratorType
+from nndet.arch.encoder.gcalf.grade_head import grade_loss
 
 
 class BaseRetinaNet(AbstractModel):
@@ -41,6 +42,7 @@ class BaseRetinaNet(AbstractModel):
                  nms_thresh: float = 0.9,
                  # optional
                  segmenter: Optional[SegmenterType] = None,
+                 grade_head: Optional[nn.Module] = None,
                  ):
         """
         Base Retina(U)Net
@@ -61,6 +63,9 @@ class BaseRetinaNet(AbstractModel):
             remove_small_boxes: remove small bounding boxes
             nms_thresh: non maximum suppression threshold
             segmenter: segmentation module
+            grade_head: masked GGG2-5 grade classifier (GradeClassifierHead,
+                ARCHITECTURE.md Sec 8), parallel to `head`'s csPCa classifier.
+                None disables it entirely (no grade logits, no grade loss).
         """
         super().__init__()
         assert dim in [2, 3]
@@ -82,6 +87,7 @@ class BaseRetinaNet(AbstractModel):
         self.nms_thresh = nms_thresh
 
         self.segmenter = segmenter
+        self.grade_head = grade_head
 
     def train_step(self,
                    images: Tensor,
@@ -138,6 +144,24 @@ class BaseRetinaNet(AbstractModel):
         head_losses, pos_idx, neg_idx = self.head.compute_loss(
             pred_detection, labels, matched_gt_boxes, anchors)
         losses.update(head_losses)
+
+        if self.grade_head is not None and "target_grades" in targets:
+            # Same matched-positive anchors the detection classifier uses
+            # (pos_idx), not a separate selection -- this is the "same
+            # attachment point... reuse that plumbing" design (ARCHITECTURE.md
+            # Sec 8). grade_supervised is masked per anchor by
+            # assign_grades_to_anchors, so unsupervised positives and all
+            # negatives contribute zero grade loss and zero grade-head
+            # gradient regardless of what pos_idx contains.
+            matched_grades, matched_grade_supervised = self.assign_grades_to_anchors(
+                anchors, target_boxes,
+                targets["target_grades"], targets["target_grade_supervised"])
+            batch_grades = torch.cat(matched_grades, dim=0)[pos_idx]
+            batch_grade_supervised = torch.cat(matched_grade_supervised, dim=0)[pos_idx]
+            grade_logits = pred_detection["grade_logits"][pos_idx]
+            losses["grade"] = grade_loss(
+                grade_logits, batch_grades, batch_grade_supervised,
+                targets.get("grade_class_weights"))
 
         if self.segmenter is not None:
             losses.update(self.segmenter.compute_loss(pred_seg, target_seg))
@@ -220,6 +244,8 @@ class BaseRetinaNet(AbstractModel):
         feature_maps_head = [features_maps_all[i] for i in self.decoder_levels]
 
         pred_detection = self.head(feature_maps_head)
+        if self.grade_head is not None:
+            pred_detection["grade_logits"] = self.grade_head(feature_maps_head)
         anchors = self.anchor_generator(inp, feature_maps_head)
 
         pred_seg = self.segmenter(features_maps_all) if self.segmenter is not None else None
@@ -288,6 +314,65 @@ class BaseRetinaNet(AbstractModel):
             labels.append(labels_per_image)
             matched_gt_boxes.append(matched_gt_boxes_per_image)
         return labels, matched_gt_boxes
+
+    @torch.no_grad()
+    def assign_grades_to_anchors(self,
+                                 anchors: List[torch.Tensor],
+                                 target_boxes: List[torch.Tensor],
+                                 target_grades: List[torch.Tensor],
+                                 target_grade_supervised: List[torch.Tensor],
+                                 ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+        """
+        Gather the GGG2-5 grade and grade_supervised flag matched to each
+        anchor (ARCHITECTURE.md Sec 8), via the same IoU matching
+        :method:`assign_targets_to_anchors` uses for classes/boxes. Kept as a
+        separate method (re-running the matcher) rather than folding into
+        assign_targets_to_anchors, so existing callers of that method are
+        unaffected by grade metadata being unavailable or absent.
+
+        Args:
+            anchors (List[torch.Tensor[float]]): anchors (!)per image(!)
+                List[[N, dim * 2]], N=number of anchors per image
+            target_boxes (List[torch.Tensor[float]]): ground truth boxes
+                (!)per image(!) List[[X, dim * 2]], X=number of gt per image
+            target_grades (List[torch.Tensor]): ground truth grade per box
+                (!)per image(!) List[[X]], X=number of gt per image
+            target_grade_supervised (List[torch.Tensor]): ground truth
+                grade_supervised flag per box (bool) (!)per image(!) List[[X]]
+
+        Returns:
+            List[torch.Tensor]: matched grade per anchor List[[N]]
+            List[torch.Tensor]: matched grade_supervised per anchor (bool)
+                List[[N]]. False at every background/discarded anchor,
+                regardless of what an arbitrary clamp(min=0) gather would
+                otherwise return there.
+        """
+        matched_grades = []
+        matched_grade_supervised = []
+        for anchors_per_image, gt_boxes, gt_grades, gt_grade_supervised in zip(
+                anchors, target_boxes, target_grades, target_grade_supervised):
+            match_quality_matrix, matched_idxs = self.proposal_matcher(
+                gt_boxes, anchors_per_image,
+                num_anchors_per_level=self.anchor_generator.get_num_acnhors_per_level(),
+                num_anchors_per_loc=self.anchor_generator.num_anchors_per_location()[0])
+
+            if match_quality_matrix.numel() > 0:
+                grades_per_image = gt_grades[matched_idxs.clamp(min=0)].to(dtype=torch.long)
+                supervised_per_image = gt_grade_supervised[matched_idxs.clamp(min=0)].clone().to(dtype=torch.bool)
+            else:
+                num_anchors_per_image = anchors_per_image.shape[0]
+                grades_per_image = torch.zeros(
+                    num_anchors_per_image, dtype=torch.long, device=anchors_per_image.device)
+                supervised_per_image = torch.zeros(
+                    num_anchors_per_image, dtype=torch.bool, device=anchors_per_image.device)
+
+            unmatched = (matched_idxs == self.proposal_matcher.BELOW_LOW_THRESHOLD) | \
+                        (matched_idxs == self.proposal_matcher.BETWEEN_THRESHOLDS)
+            supervised_per_image[unmatched] = False
+
+            matched_grades.append(grades_per_image)
+            matched_grade_supervised.append(supervised_per_image)
+        return matched_grades, matched_grade_supervised
 
     def postprocess_detections(self,
                                pred_detection: Dict[str, Tensor],
