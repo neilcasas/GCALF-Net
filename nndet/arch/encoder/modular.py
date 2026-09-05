@@ -1,46 +1,19 @@
-import torch 
+import torch
 import torch.nn as nn
 from typing import Callable, Tuple, Sequence, Union, List, Optional
 from nndet.arch.encoder.abstract import AbstractEncoder
 from nndet.arch.blocks.basic import AbstractBlock
 
 from nndet.arch.encoder.swimTransformer import SwinTransformer3D
-import torch.nn.functional as F  # 加入插值函数
+import torch.nn.functional as F
 import logging
-from nndet.arch.encoder.window_attention_fusion import WindowAttentionFusion
-from nndet.arch.encoder.WaveletFusion import WaveletSpatialFusion
-from nndet.arch.encoder.channel_lightweight_fusion import ChannelWiseLightFusion
+from nndet.arch.encoder.gcalf.registry import build_frequency_module, build_fusion_module
 
-# 配置日志级别和格式
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 __all__ = ["Encoder"]
 
-class MemoryEfficientFusion(nn.Module):
-    """
-    内存友好的真正融合模块
-    - 解决假融合问题
-    - 适合11GB GPU内存
-    - 保证真正的CNN-Transformer交互
-    - 基于2024年CVPR最新轻量级融合方法
-    """
-    def __init__(self, conv_channels, transformer_channels, fused_channels, window_size, num_heads):
-        super().__init__()
-        
-        # 使用通道级轻量融合策略 - 解决假融合问题
-        self.channel_fusion = ChannelWiseLightFusion(
-            cnn_channels=conv_channels,
-            trans_channels=transformer_channels,
-            out_channels=fused_channels
-        )
-    
-    def forward(self, conv_feat, transformer_feat):
-        """
-        内存友好的真正融合 - 简化版本
-        """
-        # 直接使用通道级轻量融合，无需额外处理
-        return self.channel_fusion(conv_feat, transformer_feat)
 
 class Encoder(AbstractEncoder):
     def __init__(self,
@@ -54,11 +27,16 @@ class Encoder(AbstractEncoder):
                  out_stages: Sequence[int] = None,
                  max_channels: int = None,
                  first_block_cls: Optional[AbstractBlock] = None,
-                 # 移除额外参数
-                 # bam_reduction_ratio: int = 16,
-                 # drop_prob: float = 0.2,
-                 # block_size: int = 5,
-                 fft_low_ratio: float = 0.3):  # 添加 FFT 低频比例参数
+                 gcalf_cfg: Optional[dict] = None):
+        """
+        Args:
+            gcalf_cfg: GCALF-Net's ablation config (ARCHITECTURE.md Sec 4):
+                `frequency_filter_type` ("fdsf"|"lff"), `fusion_type` ("waf"|"caf"),
+                `num_levels`, `fusion_levels`, and one options dict per frequency/fusion
+                kind. When None, the encoder runs as a plain CNN (no Swin branch, no
+                frequency separation, no fusion) -- this is the legacy/back-compat path
+                used by callers that only exercise the base conv-stage mechanics.
+        """
         super().__init__()
         self.num_stages = len(conv_kernels)
         self.dim = conv.dim
@@ -75,28 +53,37 @@ class Encoder(AbstractEncoder):
         if first_block_cls is None:
             first_block_cls = block_cls
 
+        self.gcalf_cfg = gcalf_cfg
+        self.use_transformer = gcalf_cfg is not None
+        if self.use_transformer:
+            num_levels = gcalf_cfg.get("num_levels", 5)
+            if self.num_stages != num_levels:
+                raise ValueError(
+                    f"GCALF-Net requires exactly {num_levels} encoder levels (ARCHITECTURE.md Sec 4); "
+                    f"got {self.num_stages} levels from the resolved plan's conv_kernels/strides.")
+            self.fusion_levels = list(gcalf_cfg.get("fusion_levels", list(range(num_levels))))
+            if any(level < 0 or level >= num_levels for level in self.fusion_levels):
+                raise ValueError(f"fusion_levels {self.fusion_levels} out of range for {num_levels} levels")
+
+            frequency_kind = gcalf_cfg.get("frequency_filter_type", "fdsf")
+            self.frequency_module = build_frequency_module(
+                frequency_kind, in_channels, gcalf_cfg.get(frequency_kind, {}))
+
         stages = []
         self.out_channels = []
-        self.self_attention_fusion_modules = nn.ModuleList()
-        
-        # 小波融合模块 - 使用GPU加速版本，恢复所有stage
-        self.use_wavelet_fusion = True
-        self.wavelet_fusion_stages = [1, 3, 4]  # GPU版本速度快，可以使用所有stage
-        self.wavelet_fusion_modules = nn.ModuleList()
         in_ch = in_channels
         if isinstance(strides[0], int):
             strides = [tuple([s] * self.dim) for s in strides]
         self.strides = strides
-        self.use_transformer = True
+
         if self.use_transformer:
-            # 确保 depths 和 num_heads 的长度与 self.num_stages 一致
             self.depths = [2] * self.num_stages
             self.num_heads = [4 * (2 ** i) for i in range(self.num_stages)]
             self.transformer = SwinTransformer3D(
                 in_chans=in_channels,
                 embed_dim=start_channels,
-                window_size=(2,7,7),
-                patch_size=(2,4,4),
+                window_size=(2, 7, 7),
+                patch_size=(2, 4, 4),
                 depths=self.depths,
                 num_heads=self.num_heads,
                 mlp_ratio=4.,
@@ -104,10 +91,10 @@ class Encoder(AbstractEncoder):
                 drop_rate=0.,
                 attn_drop_rate=0.,
                 drop_path_rate=0.2,
-                norm_layer=nn.LayerNorm
+                norm_layer=nn.LayerNorm,
             )
-            # 计算每个阶段的Transformer输出通道数
             self.transformer_out_channels = [int(start_channels * 2 ** i) for i in range(self.num_stages)]
+            self.fusion_modules = nn.ModuleDict()
 
         for stage_id in range(self.num_stages):
             current_in_channels = in_ch
@@ -133,78 +120,45 @@ class Encoder(AbstractEncoder):
                 )
             in_ch = _block.get_output_channels()
             self.out_channels.append(in_ch)
-
-            # 简化：只保留核心卷积块
             stages.append(_block)
 
-            # 初始化小波融合模块
-            if self.use_wavelet_fusion and stage_id in self.wavelet_fusion_stages:
-                wavelet_fusion = WaveletSpatialFusion(
-                    in_channels=in_ch,
+            if self.use_transformer and stage_id in self.fusion_levels:
+                fusion_kind = gcalf_cfg.get("fusion_type", "waf")
+                self.fusion_modules[str(stage_id)] = build_fusion_module(
+                    fusion_kind,
+                    cnn_channels=in_ch,
+                    transformer_channels=self.transformer_out_channels[stage_id],
                     out_channels=in_ch,
-                    wavelet='haar'  # 适合医学图像的小波基
+                    options=gcalf_cfg.get(fusion_kind, {}),
                 )
-                self.wavelet_fusion_modules.append(wavelet_fusion)
-            else:
-                self.wavelet_fusion_modules.append(nn.Identity())
-
-            # 初始化 SelfAttentionFusion 模块
-            if self.use_transformer:
-                fused_channels = in_ch
-                transformer_channels = self.transformer_out_channels[stage_id]
-                window_size = self.transformer.window_size
-                num_heads = self.num_heads[stage_id]
-                self_attention_fusion = MemoryEfficientFusion(
-                    conv_channels=in_ch,
-                    transformer_channels=transformer_channels,
-                    fused_channels=fused_channels,
-                    window_size=window_size,
-                    num_heads=num_heads
-                )
-                self.self_attention_fusion_modules.append(self_attention_fusion)
 
         self.stages = torch.nn.ModuleList(stages)
 
     def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
         outputs = []
-        
-        # Step 1: 双分支输入分配 (移除FFT频域处理)
-        # CNN分支和Transformer分支都使用原始图像
-        cnn_x = x
-        if self.use_transformer:
-            transformer_feats = self.transformer(x)  # 原始图像给Transformer
 
-        
-        # Step 2: 高效的分阶段处理和选择性融合
+        if self.use_transformer:
+            # FDSF/LFF runs once at the input; low -> Swin branch, high -> CNN branch
+            # (ARCHITECTURE.md Sec 5, fixed by the paper's hypotheses).
+            x_low, x_high = self.frequency_module(x)
+            cnn_x = x_high
+            transformer_feats = self.transformer(x_low)
+        else:
+            cnn_x = x
+
         for stage_id, module in enumerate(self.stages):
-            # 处理 CNN 分支
             cnn_x = module(cnn_x)
-            
-            # 应用小波融合 (在Stage 1, 3, 4)
-            if self.use_wavelet_fusion and stage_id < len(self.wavelet_fusion_modules):
-                wavelet_module = self.wavelet_fusion_modules[stage_id]
-                if not isinstance(wavelet_module, nn.Identity):
-                    cnn_x = wavelet_module(cnn_x)
-            
-            # 选择性融合: 仅在Stage 2和5进行融合 (提高效率和效果)
-            if (self.use_transformer and 
-                stage_id < len(self.transformer_out_channels) and 
-                stage_id in [2, 5]):  # 关键融合时机
-                
-                transformer_feat = transformer_feats[stage_id]
-                transformer_feat_resized = F.interpolate(
-                    transformer_feat, size=cnn_x.shape[2:], 
-                    mode='trilinear', align_corners=False
+
+            if self.use_transformer and stage_id in self.fusion_levels:
+                transformer_feat = F.interpolate(
+                    transformer_feats[stage_id], size=cnn_x.shape[2:],
+                    mode='trilinear', align_corners=False,
                 )
-                
-                # 使用超精度融合机制
-                fused_x = self.self_attention_fusion_modules[stage_id](cnn_x, transformer_feat_resized)
-                cnn_x = fused_x
-                # logger.info(f"Stage {stage_id+1}: 极简真正融合完成 CNN: {cnn_x.shape} Transformer: {transformer_feat_resized.shape}")  # 已确认融合工作正常，关闭日志
-            
+                cnn_x = self.fusion_modules[str(stage_id)](cnn_x, transformer_feat)
+
             if stage_id in self.out_stages:
                 outputs.append(cnn_x)
-        
+
         return outputs
 
     def get_channels(self) -> List[int]:

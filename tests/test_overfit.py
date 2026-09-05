@@ -19,9 +19,8 @@ import torch
 from hydra import initialize_config_module
 from omegaconf import OmegaConf
 
-from nndet.arch.encoder.WaveletFusion import WaveletSpatialFusion
-from nndet.arch.encoder.channel_lightweight_fusion import ChannelWiseLightFusion
-from nndet.arch.encoder.modular import MemoryEfficientFusion
+from nndet.arch.encoder.gcalf.fdsf import FrequencyDomainSeparationAndShunting3D
+from nndet.arch.encoder.gcalf.waf import WindowAttentionFusion3D
 from nndet.io.datamodule.bg_loader import DataLoader3DOffset
 from nndet.io.load import load_pickle
 from nndet.io.utils import load_dataset_id
@@ -78,12 +77,11 @@ def _assert_baseline_contract(plan: dict, model: torch.nn.Module) -> None:
     assert architecture["classifier_classes"] == 4
 
     encoder = model.encoder
-    for stage in (1, 3, 4):
-        assert isinstance(encoder.wavelet_fusion_modules[stage], WaveletSpatialFusion)
-    for stage in (2, 5):
-        fusion = encoder.self_attention_fusion_modules[stage]
-        assert isinstance(fusion, MemoryEfficientFusion)
-        assert isinstance(fusion.channel_fusion, ChannelWiseLightFusion)
+    assert encoder.num_stages == 5
+    assert isinstance(encoder.frequency_module, FrequencyDomainSeparationAndShunting3D)
+    assert set(encoder.fusion_modules.keys()) == {str(level) for level in encoder.fusion_levels}
+    for fusion in encoder.fusion_modules.values():
+        assert isinstance(fusion, WindowAttentionFusion3D)
 
 
 def _expected_encoder_spatial_shapes(plan: dict) -> list:
