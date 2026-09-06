@@ -17,7 +17,7 @@ edges and can emit out-of-range or negative values on the quantitative
 ADC/HBV maps.
 """
 
-from typing import Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 import SimpleITK as sitk
@@ -195,6 +195,75 @@ def pad_or_crop_depth(image: sitk.Image, target_slices: int = TARGET_NUM_SLICES)
     return result
 
 
+def mask_retention_stats(mask: sitk.Image) -> Dict[str, int]:
+    """Return foreground voxel and connected-component counts for a lesion mask."""
+    array = sitk.GetArrayFromImage(mask)
+    foreground = array > 0
+    _, components = ndimage.label(foreground, structure=np.ones((3, 3, 3), dtype=np.uint8))
+    return {"voxels": int(foreground.sum()), "components": int(components)}
+
+
+def preprocess_case_with_retention(
+    t2w: sitk.Image,
+    adc: sitk.Image,
+    hbv: sitk.Image,
+    lesion_mask: sitk.Image,
+    whole_gland: sitk.Image,
+    target_fov_mm: float = TARGET_FOV_MM,
+    target_slice_spacing: float = TARGET_SLICE_SPACING,
+    target_num_slices: int = TARGET_NUM_SLICES,
+) -> Tuple[sitk.Image, sitk.Image, sitk.Image, sitk.Image, str, Dict[str, Dict[str, int]]]:
+    """Run the full preprocessing pipeline for one case. `lesion_mask` may be an
+    all-zero mask for csPCa-negative cases -- every case has an annotation file
+    (human_expert or Pooch25), so this is never None; it is resampled and
+    cropped like every other volume but never used to choose the crop.
+    Returns (t2w, adc, hbv, lesion_mask, crop_strategy), all sharing identical
+    geometry. `crop_strategy` is "gland" (the default) or
+    "t2w_geometric_centre" (only when the whole-gland mask is empty) -- see
+    `resolve_crop_center`; the caller should log any non-"gland" case. No
+    normalization is performed here (ARCHITECTURE.md Sec 3 item 8). The
+    returned retention dictionary captures the lesion-mask state before
+    preprocessing, after common-grid resampling, after the in-plane crop, and
+    after depth handling. It is post-crop QC only and never influences crop
+    coordinates."""
+    retention = {"source": mask_retention_stats(lesion_mask)}
+    t2w = n4_bias_correct(t2w)
+
+    reference = build_target_reference(t2w, target_slice_spacing)
+    t2w = resample_to_reference(t2w, reference, is_label=False)
+    adc = resample_to_reference(adc, reference, is_label=False)
+    hbv = resample_to_reference(hbv, reference, is_label=False)
+    whole_gland = resample_to_reference(whole_gland, reference, is_label=True)
+    lesion_mask = resample_to_reference(lesion_mask, reference, is_label=True)
+    retention["resampled"] = mask_retention_stats(lesion_mask)
+
+    (center_y, center_x), crop_strategy = resolve_crop_center(whole_gland)
+    spacing_x, spacing_y, _ = t2w.GetSpacing()  # in-plane spacing is untouched by the reference resample
+    size_yx = fov_mm_to_inplane_size((spacing_y, spacing_x), target_fov_mm)
+
+    t2w = center_crop_or_pad_inplane(t2w, (center_y, center_x), size_yx)
+    adc = center_crop_or_pad_inplane(adc, (center_y, center_x), size_yx)
+    hbv = center_crop_or_pad_inplane(hbv, (center_y, center_x), size_yx)
+    lesion_mask = center_crop_or_pad_inplane(lesion_mask, (center_y, center_x), size_yx)
+    retention["inplane"] = mask_retention_stats(lesion_mask)
+
+    t2w = pad_or_crop_depth(t2w, target_num_slices)
+    adc = pad_or_crop_depth(adc, target_num_slices)
+    hbv = pad_or_crop_depth(hbv, target_num_slices)
+    lesion_mask = pad_or_crop_depth(lesion_mask, target_num_slices)
+    retention["final"] = mask_retention_stats(lesion_mask)
+
+    # Nearest-neighbour is used for every mask resample above; a linear-interpolated
+    # {0,2,3,4,5}-valued mask would fabricate nonexistent grade values, so verify the
+    # domain explicitly rather than trust the interpolator choice silently.
+    mask_values = set(np.unique(sitk.GetArrayFromImage(lesion_mask)).tolist())
+    unsupported = mask_values - {0, 1, 2, 3, 4, 5}
+    if unsupported:
+        raise ValueError(f"Lesion mask contains unsupported values after preprocessing: {sorted(unsupported)}")
+
+    return t2w, adc, hbv, lesion_mask, crop_strategy, retention
+
+
 def preprocess_case(
     t2w: sitk.Image,
     adc: sitk.Image,
@@ -205,44 +274,19 @@ def preprocess_case(
     target_slice_spacing: float = TARGET_SLICE_SPACING,
     target_num_slices: int = TARGET_NUM_SLICES,
 ) -> Tuple[sitk.Image, sitk.Image, sitk.Image, sitk.Image, str]:
-    """Run the full preprocessing pipeline for one case. `lesion_mask` may be an
-    all-zero mask for csPCa-negative cases -- every case has an annotation file
-    (human_expert or Pooch25), so this is never None; it is resampled and
-    cropped like every other volume but never used to choose the crop.
-    Returns (t2w, adc, hbv, lesion_mask, crop_strategy), all sharing identical
-    geometry. `crop_strategy` is "gland" (the default) or
-    "t2w_geometric_centre" (only when the whole-gland mask is empty) -- see
-    `resolve_crop_center`; the caller should log any non-"gland" case. No
-    normalization is performed here (ARCHITECTURE.md Sec 3 item 8)."""
-    t2w = n4_bias_correct(t2w)
+    """Run preprocessing while preserving the historical five-value API.
 
-    reference = build_target_reference(t2w, target_slice_spacing)
-    t2w = resample_to_reference(t2w, reference, is_label=False)
-    adc = resample_to_reference(adc, reference, is_label=False)
-    hbv = resample_to_reference(hbv, reference, is_label=False)
-    whole_gland = resample_to_reference(whole_gland, reference, is_label=True)
-    lesion_mask = resample_to_reference(lesion_mask, reference, is_label=True)
-
-    (center_y, center_x), crop_strategy = resolve_crop_center(whole_gland)
-    spacing_x, spacing_y, _ = t2w.GetSpacing()  # in-plane spacing is untouched by the reference resample
-    size_yx = fov_mm_to_inplane_size((spacing_y, spacing_x), target_fov_mm)
-
-    t2w = center_crop_or_pad_inplane(t2w, (center_y, center_x), size_yx)
-    adc = center_crop_or_pad_inplane(adc, (center_y, center_x), size_yx)
-    hbv = center_crop_or_pad_inplane(hbv, (center_y, center_x), size_yx)
-    lesion_mask = center_crop_or_pad_inplane(lesion_mask, (center_y, center_x), size_yx)
-
-    t2w = pad_or_crop_depth(t2w, target_num_slices)
-    adc = pad_or_crop_depth(adc, target_num_slices)
-    hbv = pad_or_crop_depth(hbv, target_num_slices)
-    lesion_mask = pad_or_crop_depth(lesion_mask, target_num_slices)
-
-    # Nearest-neighbour is used for every mask resample above; a linear-interpolated
-    # {0,2,3,4,5}-valued mask would fabricate nonexistent grade values, so verify the
-    # domain explicitly rather than trust the interpolator choice silently.
-    mask_values = set(np.unique(sitk.GetArrayFromImage(lesion_mask)).tolist())
-    unsupported = mask_values - {0, 1, 2, 3, 4, 5}
-    if unsupported:
-        raise ValueError(f"Lesion mask contains unsupported values after preprocessing: {sorted(unsupported)}")
-
-    return t2w, adc, hbv, lesion_mask, crop_strategy
+    Builders that must audit post-crop lesion retention use
+    :func:`preprocess_case_with_retention` instead.
+    """
+    result = preprocess_case_with_retention(
+        t2w,
+        adc,
+        hbv,
+        lesion_mask,
+        whole_gland,
+        target_fov_mm=target_fov_mm,
+        target_slice_spacing=target_slice_spacing,
+        target_num_slices=target_num_slices,
+    )
+    return result[:5]

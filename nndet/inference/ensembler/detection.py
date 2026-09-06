@@ -30,7 +30,7 @@ from nndet.inference.detection import batched_nms_model, batched_nms_ensemble, \
     batched_wbc_ensemble, wbc_nms_no_label_ensemble
 from nndet.inference.ensembler.base import BaseEnsembler, OverlapMap
 from nndet.inference.restore import restore_detection
-from nndet.core.boxes import box_center, clip_boxes_to_image, remove_small_boxes
+from nndet.core.boxes import box_center, box_iou, clip_boxes_to_image, remove_small_boxes
 from nndet.utils.tensor import cat, to_device, to_dtype
 
 
@@ -43,6 +43,7 @@ class BoxEnsembler(BaseEnsembler):
                  box_key: str = 'pred_boxes',
                  score_key: str = 'pred_scores',
                  label_key: str = 'pred_labels',
+                 grade_probs_key: str = 'pred_grade_probs',
                  data_key: str = 'data',
                  device: Optional[Union[torch.device, str]] = None,
                  **kwargs):
@@ -69,6 +70,7 @@ class BoxEnsembler(BaseEnsembler):
         self.data_key = data_key
         self.score_key = score_key
         self.label_key = label_key
+        self.grade_probs_key = grade_probs_key
         self.box_key = box_key
         self.overlap_map = OverlapMap(tuple(self.properties["shape"]))
 
@@ -80,6 +82,7 @@ class BoxEnsembler(BaseEnsembler):
                   box_key: str = 'pred_boxes',
                   score_key: str = 'pred_scores',
                   label_key: str = 'pred_labels',
+                  grade_probs_key: str = 'pred_grade_probs',
                   data_key: str = 'data',
                   device: Optional[Union[torch.device, str]] = None,
                   **kwargs,
@@ -122,6 +125,7 @@ class BoxEnsembler(BaseEnsembler):
             box_key=box_key,
             score_key=score_key,
             label_key=label_key,
+            grade_probs_key=grade_probs_key,
             data_key=data_key,
             device=device,
             **kwargs,
@@ -295,6 +299,7 @@ class BoxEnsembler(BaseEnsembler):
             name=name,
             score_key=self.score_key,
             label_key=self.label_key,
+            grade_probs_key=self.grade_probs_key,
             box_key=self.box_key,
             data_key=self.data_key,
             overlap_map=self.overlap_map,
@@ -311,6 +316,7 @@ class BoxEnsembler(BaseEnsembler):
             box_key=ckp["box_key"],
             score_key=ckp["score_key"],
             label_key=ckp["label_key"],
+            grade_probs_key=ckp.get("grade_probs_key", "pred_grade_probs"),
             data_key=ckp["data_key"],
             **kwargs
         )
@@ -361,7 +367,9 @@ class BoxEnsembler(BaseEnsembler):
         boxes = []
         scores = []
         labels = []
-        for b, s, l in zip(result[self.box_key], result[self.score_key], result[self.label_key]):
+        grade_probs = [] if self.grade_probs_key in result else None
+        grade_iter = result.get(self.grade_probs_key, [None] * len(result[self.box_key]))
+        for b, s, l, g in zip(result[self.box_key], result[self.score_key], result[self.label_key], grade_iter):
             _boxes, _scores, _labels, _ = self.postprocess_image(
                 boxes=b.float(),
                 probs=s.float(),
@@ -372,6 +380,8 @@ class BoxEnsembler(BaseEnsembler):
             boxes.append(_boxes.cpu())
             scores.append(_scores.cpu())
             labels.append(_labels.cpu())
+            if grade_probs is not None:
+                grade_probs.append(self._match_grade_probs(_boxes, _scores, _labels, b, s, l, g).cpu())
 
         centers = [box_center(img_boxes) if img_boxes.numel() > 0 else Tensor([]).to(img_boxes)
                    for img_boxes in boxes]
@@ -383,6 +393,8 @@ class BoxEnsembler(BaseEnsembler):
         self.model_results[self.model_current]["boxes"].extend(boxes)
         self.model_results[self.model_current]["scores"].extend(scores)
         self.model_results[self.model_current]["labels"].extend(labels)
+        if grade_probs is not None:
+            self.model_results[self.model_current]["grade_probs"].extend(grade_probs)
         self.model_results[self.model_current]["weights"].extend(weights)
 
         crops_reshaped = list(zip(*batch["crop"]))
@@ -446,23 +458,26 @@ class BoxEnsembler(BaseEnsembler):
         if names is None:
             names = list(self.model_results.keys())
 
-        boxes, probs, labels, weights = [], [], [], []
+        boxes, probs, labels, weights, grade_probs = [], [], [], [], []
+        has_grade_probs = all("grade_probs" in self.model_results[name] for name in names)
         for name in names:
-            _boxes, _probs, _labels, _weights = self.process_model(name)
+            _boxes, _probs, _labels, _weights, _grade_probs = self.process_model(name)
             boxes.append(_boxes)
             probs.append(_probs)
             labels.append(_labels)
             weights.append(_weights)
+            if has_grade_probs:
+                grade_probs.append(_grade_probs)
 
-        boxes, probs, labels = self.process_ensemble(
+        boxes, probs, labels, grade_probs = self.process_ensemble(
             boxes=boxes, probs=probs, labels=labels,
-            weights=weights,
+            weights=weights, grade_probs=grade_probs if has_grade_probs else None,
         )
 
         if restore:
             boxes = self.restore_prediction(boxes)
 
-        return {
+        result = {
             "pred_boxes": boxes,
             "pred_scores": probs,
             "pred_labels": labels,
@@ -472,9 +487,13 @@ class BoxEnsembler(BaseEnsembler):
             "itk_spacing": self.properties["itk_spacing"],
             "itk_direction": self.properties["itk_direction"],
             }
+        if grade_probs is not None:
+            result["pred_grade_probs"] = grade_probs
+            result["pred_grades"] = grade_probs.argmax(dim=1).to(dtype=torch.long) + 2
+        return result
 
     def process_model(self, name: Hashable) ->\
-            Tuple[Tensor, Tensor, Tensor, Tensor]:
+            Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
         """
         Process the output of a single model on the whole scan
         topk candidates -> nms
@@ -493,11 +512,15 @@ class BoxEnsembler(BaseEnsembler):
         probs = cat(self.model_results[name]["scores"], dim=0)
         labels = cat(self.model_results[name]["labels"], dim=0)
         weights = cat(self.model_results[name]["weights"], dim=0)
-        return boxes, probs, labels, weights
+        grade_probs = None
+        if self.model_results[name].get("grade_probs"):
+            grade_probs = cat(self.model_results[name]["grade_probs"], dim=0)
+        return boxes, probs, labels, weights, grade_probs
 
     def process_ensemble(self, boxes: List[Tensor], probs: List[Tensor],
                          labels: List[Tensor], weights: List[Tensor],
-                         ) -> Tuple[Tensor, Tensor, Tensor]:
+                         grade_probs: Optional[List[Tensor]] = None,
+                         ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor]]:
         """
         Ensemble predictions from multiple models
 
@@ -517,6 +540,7 @@ class BoxEnsembler(BaseEnsembler):
         probs = cat(probs, dim=0)
         labels = cat(labels, dim=0)
         weights = cat(weights, dim=0)
+        all_grade_probs = cat(grade_probs, dim=0) if grade_probs is not None else None
 
         _, idx = probs.sort(descending=True)
         idx = idx[:self.parameters["ensemble_topk"]]
@@ -524,6 +548,13 @@ class BoxEnsembler(BaseEnsembler):
         probs = probs[idx]
         labels = labels[idx]
         weights = weights[idx]
+        if all_grade_probs is not None:
+            all_grade_probs = all_grade_probs[idx]
+
+        candidate_boxes = boxes
+        candidate_probs = probs
+        candidate_labels = labels
+        candidate_grade_probs = all_grade_probs
 
         n_exp_preds = self.overlap_map.mean_num_overlap_of_boxes(boxes)
         boxes, probs, labels = self.parameters["ensemble_nms_fn"](
@@ -533,7 +564,29 @@ class BoxEnsembler(BaseEnsembler):
             n_exp_preds=n_exp_preds,
             score_thresh=self.parameters["ensemble_score_thresh"],
         )
-        return boxes.cpu(), probs.cpu(), labels.cpu()
+        if all_grade_probs is not None:
+            all_grade_probs = self._match_grade_probs(
+                boxes, probs, labels,
+                candidate_boxes, candidate_probs, candidate_labels, candidate_grade_probs)
+        return boxes.cpu(), probs.cpu(), labels.cpu(), None if all_grade_probs is None else all_grade_probs.cpu()
+
+    @staticmethod
+    def _match_grade_probs(final_boxes, final_scores, final_labels,
+                           candidate_boxes, candidate_scores, candidate_labels, candidate_grade_probs):
+        """Carry grade probabilities from the best matching retained detector box.
+
+        Detection postprocessing can consolidate boxes during ensembling. Grades are
+        therefore attached to the candidate with the highest IoU, breaking ties by
+        its csPCa score. This is exact for the normal single-model NMS path.
+        """
+        if candidate_grade_probs is None:
+            return None
+        if final_boxes.numel() == 0:
+            return candidate_grade_probs.new_empty((0, candidate_grade_probs.shape[1]))
+        ious = box_iou(final_boxes, candidate_boxes)
+        same_label = final_labels[:, None] == candidate_labels[None, :]
+        ranked = ious + same_label.to(ious) * candidate_scores[None, :] * 1e-6
+        return candidate_grade_probs[ranked.argmax(dim=1)]
 
 
 class BoxEnsemblerLW(BoxEnsembler):

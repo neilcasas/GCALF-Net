@@ -2,6 +2,22 @@
 
 **Status:** complete — CUDA runtime verification (the V gate) now passes.
 
+## 2026-09-05 — mounted-checkout CUDA revalidation
+
+After the Phase 2 checkout changes, the bind-mounted source tree initially lacked the compiled
+`nndet._C` extension and therefore shadowed the extension bundled in `gcalf:m0`. Rebuild the
+extension in the mounted checkout with the pinned toolchain before running the test:
+
+```bash
+docker run --rm --gpus all -v /home/vgr/dev/thesis/GCALF-Net:/workspace -w /workspace \
+  gcalf:m0 bash -lc 'FORCE_CUDA=1 MAX_JOBS=1 python setup.py build_ext --inplace'
+```
+
+`docker run --rm --gpus all -v /home/vgr/dev/thesis/GCALF-Net:/workspace -w /workspace
+gcalf:m0 python -m pytest -q tests/test_csrc_cuda.py`: **1 passed**. The import resolved to
+`/workspace/nndet/__init__.py`. The resulting extension (~8.2 MB), `build/` (~21 MB), and
+`nndet.egg-info/` are ignored build artifacts.
+
 ## 2026-09-05 — CUDA V gate closed, gcalf scaffold completed
 
 The image was rebuilt after adding the remaining empty `gcalf/` scaffold modules (`fdr.py`,

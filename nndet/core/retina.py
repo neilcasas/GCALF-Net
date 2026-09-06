@@ -20,7 +20,7 @@ from nndet.arch.decoder.base import DecoderType
 from nndet.arch.heads.segmenter import SegmenterType
 from nndet.arch.heads.comb import HeadType
 from nndet.core.boxes.anchors import AnchorGeneratorType
-from nndet.arch.encoder.gcalf.grade_head import grade_loss
+from nndet.arch.encoder.gcalf.grade_head import grade_loss, index_to_grade
 
 
 class BaseRetinaNet(AbstractModel):
@@ -208,12 +208,15 @@ class BaseRetinaNet(AbstractModel):
                 'pred_seg': Tensor: predicted segmentation [N, C, dims]
         """
         image_shapes = [images.shape[2:]] * images.shape[0]
-        boxes, probs, labels = self.postprocess_detections(
+        boxes, probs, labels, grade_probs = self.postprocess_detections(
             pred_detection=pred_detection,
             anchors=anchors,
             image_shapes=image_shapes,
         )
         prediction = {"pred_boxes": boxes, "pred_scores": probs, "pred_labels": labels}
+        if grade_probs is not None:
+            prediction["pred_grade_probs"] = grade_probs
+            prediction["pred_grades"] = [index_to_grade(item.argmax(dim=1)) for item in grade_probs]
 
         if self.segmenter is not None:
             prediction["pred_seg"] = self.segmenter.postprocess_for_inference(pred_seg)["pred_seg"]
@@ -378,7 +381,7 @@ class BaseRetinaNet(AbstractModel):
                                pred_detection: Dict[str, Tensor],
                                anchors: List[Tensor],
                                image_shapes: List[Tuple[int]],
-                               ) -> Tuple[List[Tensor], List[Tensor], List[Tensor]]:
+                               ) -> Tuple[List[Tensor], List[Tensor], List[Tensor], Optional[List[Tensor]]]:
         """
         Postprocess bounding box deltas and logits to generate final boxes and
         scores
@@ -400,26 +403,37 @@ class BaseRetinaNet(AbstractModel):
         boxes_per_image = [len(boxes_in_image) for boxes_in_image in anchors]
         pred_detection = self.head.postprocess_for_inference(pred_detection, anchors)
         pred_boxes, pred_probs = pred_detection["pred_boxes"], pred_detection["pred_probs"]
+        pred_grade_probs = None
+        if "grade_logits" in pred_detection:
+            pred_grade_probs = torch.softmax(pred_detection["grade_logits"], dim=1)
 
         # split boxes and scores per image
         pred_boxes = pred_boxes.split(boxes_per_image, 0)
         pred_probs = pred_probs.split(boxes_per_image, 0)
+        if pred_grade_probs is not None:
+            pred_grade_probs = pred_grade_probs.split(boxes_per_image, 0)
 
         all_boxes, all_probs, all_labels = [], [], []
+        all_grade_probs = [] if pred_grade_probs is not None else None
         # iterate over images
-        for boxes, probs, image_shape in zip(pred_boxes, pred_probs, image_shapes):
-            boxes, probs, labels = self.postprocess_detections_single_image(boxes, probs, image_shape)
+        grade_iter = pred_grade_probs if pred_grade_probs is not None else [None] * len(pred_boxes)
+        for boxes, probs, grade_probs, image_shape in zip(pred_boxes, pred_probs, grade_iter, image_shapes):
+            boxes, probs, labels, grade_probs = self.postprocess_detections_single_image(
+                boxes, probs, image_shape, grade_probs=grade_probs)
             all_boxes.append(boxes)
             all_probs.append(probs)
             all_labels.append(labels)
-        return all_boxes, all_probs, all_labels
+            if all_grade_probs is not None:
+                all_grade_probs.append(grade_probs)
+        return all_boxes, all_probs, all_labels, all_grade_probs
 
     def postprocess_detections_single_image(
         self, 
         boxes: Tensor, 
         probs: Tensor,
         image_shape: Tuple[int],
-        ) -> Tuple[Tensor, Tensor, Tensor]:
+        grade_probs: Optional[Tensor] = None,
+        ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor]]:
         """
         Postprocess bounding box deltas and probabilities for a single image
         Adapted from torchvision https://github.com/pytorch/vision
@@ -452,16 +466,22 @@ class BaseRetinaNet(AbstractModel):
         anchor_idxs = torch.div(idx, self.num_foreground_classes, rounding_mode="floor")
         labels = idx % self.num_foreground_classes
         boxes = boxes[anchor_idxs]
+        if grade_probs is not None:
+            grade_probs = grade_probs[anchor_idxs]
 
         if self.remove_small_boxes is not None:
             keep = box_utils.remove_small_boxes(boxes, min_size=self.remove_small_boxes)
             boxes, probs, labels = boxes[keep], probs[keep], labels[keep]
+            if grade_probs is not None:
+                grade_probs = grade_probs[keep]
 
         keep = box_utils.batched_nms(boxes, probs, labels, self.nms_thresh)
         
         if self.detections_per_img is not None:
             keep = keep[:self.detections_per_img]
-        return boxes[keep], probs[keep], labels[keep]
+        if grade_probs is not None:
+            grade_probs = grade_probs[keep]
+        return boxes[keep], probs[keep], labels[keep], grade_probs
 
     # @torch.no_grad()
     # def save_matched_anchors(self, **kwargs):

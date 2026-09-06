@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import os
 import copy
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from functools import partial
 from typing import Callable, Hashable, Sequence, Dict, Any, Type
@@ -52,7 +52,8 @@ from nndet.arch.heads.regressor import RegressorType, L1Regressor, MedicalSmallT
 from nndet.arch.heads.comb import HeadType, DetectionHeadHNM
 from nndet.arch.heads.segmenter import SegmenterType, DiCESegmenter
 from nndet.arch.heads.grade_classifier import GradeAnchorFeatureExtractor, GradeClassifierHead
-from nndet.arch.encoder.gcalf.grade_head import GradeHead
+from nndet.arch.encoder.gcalf.grade_head import GRADE_MAX, GRADE_MIN, GradeHead
+from nndet.io.load import load_pickle
 
 from nndet.training.optimizer import get_params_no_wd_on_norm
 from nndet.training.learning_rate import LinearWarmupPolyLR
@@ -108,6 +109,7 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             trainer_cfg=trainer_cfg,
             plan=plan,
         )
+        self.register_buffer("grade_class_weights", torch.ones(GRADE_MAX - GRADE_MIN + 1))
 
         _classes = [f"class{c}" for c in range(plan["architecture"]["classifier_classes"])]
         
@@ -168,6 +170,34 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             # IoU模式
             self.eval_score_key = "mAP_IoU_0.10_0.50_0.05_MaxDet_100"
 
+    @staticmethod
+    def compute_grade_class_weights(dataset) -> torch.Tensor:
+        """Return mean-one inverse-frequency GGG2-5 weights for one train fold."""
+        counts = Counter()
+        for item in dataset.values():
+            properties = load_pickle(item["properties_file"])
+            grades = properties.get("grades", {})
+            supervised = properties.get("grade_supervised", {})
+            for instance_id, is_supervised in supervised.items():
+                if is_supervised:
+                    grade = int(grades[instance_id])
+                    if grade < GRADE_MIN or grade > GRADE_MAX:
+                        raise ValueError(f"Invalid grade {grade} in {item['properties_file']}")
+                    counts[grade] += 1
+        missing = [grade for grade in range(GRADE_MIN, GRADE_MAX + 1) if counts[grade] == 0]
+        if missing:
+            raise ValueError(f"Training fold has no grade-supervised lesions for GGG {missing}")
+        weights = torch.tensor([1.0 / counts[grade] for grade in range(GRADE_MIN, GRADE_MAX + 1)])
+        return weights / weights.mean()
+
+    def on_fit_start(self) -> None:
+        """Freeze grade-loss weights from this fold's training partition only."""
+        if self.model.grade_head is not None:
+            weights = self.compute_grade_class_weights(self.trainer.datamodule.dataset_tr)
+            self.grade_class_weights.copy_(weights.to(self.grade_class_weights))
+            logger.info(f"Grade class weights for this fold: {self.grade_class_weights.tolist()}")
+        return super().on_fit_start()
+
     def training_step(self, batch, batch_idx):
         """
         Computes a single training step
@@ -184,10 +214,7 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                 "target_seg": batch['target'][:, 0],  # Remove channel dimension
                 "target_grades": batch["grades"],
                 "target_grade_supervised": batch["grade_supervised"],
-                # Per-fold inverse-frequency weights (ARCHITECTURE.md Sec 8);
-                # None until fold-wise derivation is wired up, which grade_loss
-                # treats as unweighted cross-entropy.
-                "grade_class_weights": getattr(self, "grade_class_weights", None),
+                "grade_class_weights": self.grade_class_weights,
                 },
             evaluation=False,
             batch_num=batch_idx,
@@ -209,7 +236,7 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                     "target_seg": batch['target'][:, 0],  # Remove channel dimension
                     "target_grades": batch["grades"],
                     "target_grade_supervised": batch["grade_supervised"],
-                    "grade_class_weights": getattr(self, "grade_class_weights", None),
+                    "grade_class_weights": self.grade_class_weights,
                 }
             losses, prediction = self.model.train_step(
                 images=batch["data"],

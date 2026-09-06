@@ -17,6 +17,12 @@ from typing import Dict, Iterable, List, Sequence, Set
 from picai_prep import nnunet2nndet
 
 from gcalf_data import preprocessing
+from gcalf_data.audit_crop_retention import (
+    excluded_case_ids,
+    make_record,
+    validate_audit,
+    write_audit,
+)
 from gcalf_data.audit_unifocal import run_audit
 from gcalf_data.build_labels import inject_grade_metadata
 
@@ -37,6 +43,25 @@ def load_splits(path: Path) -> List[Dict[str, List[str]]]:
         if not all(isinstance(case_id, str) for case_id in split["train"] + split["val"]):
             raise ValueError(f"Fold {fold} contains a non-string case identifier")
     return splits
+
+
+def apply_exclusions_to_splits(
+    splits: Sequence[Dict[str, List[str]]], exclusions: Set[str]
+) -> List[Dict[str, List[str]]]:
+    """Remove predeclared preprocessing exclusions from every official fold.
+
+    A source-positive lesion that is wholly lost by the target-independent crop
+    cannot be relabelled as benign. ADR 0002 D6 item 7 requires its removal
+    from every arm, which means deriving the retained-cohort folds here.
+    """
+    retained_splits = []
+    for fold, split in enumerate(splits):
+        train = [case_id for case_id in split["train"] if case_id not in exclusions]
+        val = [case_id for case_id in split["val"] if case_id not in exclusions]
+        if set(train) & set(val):
+            raise ValueError(f"Fold {fold} has overlapping train and validation cases after exclusions")
+        retained_splits.append({"train": train, "val": val})
+    return retained_splits
 
 
 def dataset_json(task: str) -> Dict[str, object]:
@@ -132,6 +157,7 @@ def build_task(
     start_time = time.time()
     total_cases = len(case_ids)
     crop_strategy_exceptions: Dict[str, str] = {}
+    crop_retention_records = []
     for index, case_id in enumerate(case_ids, start=1):
         patient_dir = patient_index.get(patient_id(case_id))
         if patient_dir is None:
@@ -146,21 +172,26 @@ def build_task(
         lesion_mask = sitk.ReadImage(str(lesion_mask_path))
         whole_gland = sitk.ReadImage(str(whole_gland_path))
 
-        t2w, adc, hbv, lesion_mask, crop_strategy = preprocessing.preprocess_case(
+        t2w, adc, hbv, lesion_mask, crop_strategy, retention = preprocessing.preprocess_case_with_retention(
             t2w, adc, hbv, lesion_mask, whole_gland
         )
+        retention_record = make_record(case_id, crop_strategy, retention)
+        crop_retention_records.append(retention_record)
 
-        sitk.WriteImage(t2w, str(images_out / f"{case_id}_0000.nii.gz"))
-        sitk.WriteImage(adc, str(images_out / f"{case_id}_0001.nii.gz"))
-        sitk.WriteImage(hbv, str(images_out / f"{case_id}_0002.nii.gz"))
-        sitk.WriteImage(lesion_mask, str(labels_out / f"{case_id}.nii.gz"))
+        excluded = retention_record["status"] == "excluded_no_retained_voxels"
+        if excluded:
+            note = " [excluded: gland-centred crop retained no lesion voxels]"
+        else:
+            sitk.WriteImage(t2w, str(images_out / f"{case_id}_0000.nii.gz"))
+            sitk.WriteImage(adc, str(images_out / f"{case_id}_0001.nii.gz"))
+            sitk.WriteImage(hbv, str(images_out / f"{case_id}_0002.nii.gz"))
+            sitk.WriteImage(lesion_mask, str(labels_out / f"{case_id}.nii.gz"))
 
         elapsed = time.time() - start_time
         eta = elapsed / index * (total_cases - index)
-        note = ""
         if crop_strategy != "gland":
             crop_strategy_exceptions[case_id] = crop_strategy
-            note = f" [gland-centered crop would have clipped the lesion -- used '{crop_strategy}' crop instead]"
+            note += f" [used target-independent '{crop_strategy}' crop strategy]"
         print(
             f"[{index}/{total_cases}] preprocessed {case_id} "
             f"(elapsed {elapsed / 60:.1f} min, eta {eta / 60:.1f} min){note}",
@@ -176,8 +207,18 @@ def build_task(
     audit_results = run_audit(pooch25_dir, marksheet_path)
     inject_grade_metadata(task_dir / "raw_splitted" / "labelsTr", audit_results)
 
+    exclusions = excluded_case_ids(crop_retention_records)
+    splits = apply_exclusions_to_splits(splits, exclusions)
     with (task_dir / "splits.json").open("w") as file:
         json.dump(splits, file, indent=2)
+
+    audit_paths = write_audit(crop_retention_records, task_dir)
+    raw_cases = {
+        path.name[:-12]
+        for path in (task_dir / "raw_splitted" / "imagesTr").glob("*_0000.nii.gz")
+    }
+    split_cases = {case_id for split in splits for key in ("train", "val") for case_id in split[key]}
+    validate_audit(task_dir, raw_cases, split_cases)
 
     with (task_dir / "crop_strategy_exceptions.json").open("w") as file:
         json.dump(crop_strategy_exceptions, file, indent=2, sort_keys=True)
@@ -186,6 +227,9 @@ def build_task(
             f"{len(crop_strategy_exceptions)} case(s) needed a non-gland-centered crop "
             f"(recorded in crop_strategy_exceptions.json): {crop_strategy_exceptions}"
         )
+    if exclusions:
+        print(f"Excluded {len(exclusions)} source-positive case(s): {sorted(exclusions)}")
+    print(f"Wrote crop-retention audit: {audit_paths['audit']}")
 
 
 def install_splits(task_dir: Path, preprocessed_dir: Path) -> Path:
@@ -200,6 +244,7 @@ def install_splits(task_dir: Path, preprocessed_dir: Path) -> Path:
         raise ValueError(
             f"Raw task cases ({len(raw_cases)}) and official split cases ({len(split_cases)}) differ"
         )
+    validate_audit(task_dir, raw_cases, split_cases)
     preprocessed_dir.mkdir(parents=True, exist_ok=True)
     output_path = preprocessed_dir / "splits_final.pkl"
     with output_path.open("wb") as file:

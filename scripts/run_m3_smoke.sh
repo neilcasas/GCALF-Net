@@ -43,9 +43,9 @@ import sys
 with open(sys.argv[1], "rb") as file:
     architecture = pickle.load(file)["architecture"]
 assert architecture["in_channels"] == 3, architecture
-assert architecture["classifier_classes"] == 4, architecture
+assert architecture["classifier_classes"] == 1, architecture
 ' "$tiny_task_dir/preprocessed/D3V001_3d.pkl"
-python scripts/train.py "$task_name" --sweep -o train=smoke
+python scripts/train.py "$task_name" --sweep -o train=gcalf_smoke
 python scripts/predict.py "$task_name" "$model_name" -f 0
 python -m gcalf_eval.run_eval --task "$task_name" --model "$model_name" --fold 0 --split test
 
@@ -60,6 +60,10 @@ from pathlib import Path
 training_dir = Path(sys.argv[1])
 for artifact in ("model_best.ckpt", "model_last.ckpt", "plan_inference.pkl"):
     assert (training_dir / artifact).is_file(), training_dir / artifact
+
+import torch
+state = torch.load(training_dir / "model_last.ckpt", map_location="cpu")["state_dict"]
+assert any(key.startswith("model.grade_head.") for key in state), "grade head was not checkpointed"
 
 with open(sys.argv[2], newline="") as file:
     rows = list(csv.DictReader(file))

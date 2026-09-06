@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import json
 import math
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import numpy as np
 import SimpleITK as sitk
 from picai_eval import evaluate
 
+from gcalf_eval.grade_metrics import match_grade_predictions, summarize_grade_matches, supervised_instances
 from nndet.io.load import load_pickle
 from nndet.io.paths import get_task, get_training_dir
 
@@ -25,6 +27,10 @@ METRIC_FIELDS = (
     "picai_score",
     "auroc",
     "lesion_ap",
+    "grade_matched_detections",
+    "grade_missed_supervised",
+    "grade_false_positives",
+    "grade_weighted_f1",
 )
 
 
@@ -111,6 +117,9 @@ def run_evaluation(
 
     detection_maps = []
     ground_truth_masks = []
+    grade_true, grade_predicted = [], []
+    grade_misses = grade_false_positives = 0
+    has_grade_predictions = True
     for case_id in expected_case_ids:
         prediction = load_pickle(prediction_dir / f"{case_id}_boxes.pkl")
         detection_map = boxes_to_detection_map(prediction)
@@ -122,6 +131,17 @@ def run_evaluation(
             )
         detection_maps.append(detection_map)
         ground_truth_masks.append(ground_truth)
+        if "pred_grade_probs" not in prediction:
+            has_grade_predictions = False
+        else:
+            gt_boxes, gt_grades = supervised_instances(ground_truth_dir / f"{case_id}.nii.gz")
+            truth, predicted, misses, false_positives = match_grade_predictions(
+                prediction["pred_boxes"], prediction["pred_scores"], prediction["pred_grade_probs"],
+                gt_boxes, gt_grades)
+            grade_true.extend(truth)
+            grade_predicted.extend(predicted)
+            grade_misses += misses
+            grade_false_positives += false_positives
 
     has_positive = any(mask.any() for mask in ground_truth_masks)
     has_negative = any(not mask.any() for mask in ground_truth_masks)
@@ -146,10 +166,15 @@ def run_evaluation(
         "auroc": metrics.auroc,
         "lesion_ap": metrics.AP,
     }
+    if has_grade_predictions:
+        row.update(summarize_grade_matches(grade_true, grade_predicted, grade_misses, grade_false_positives))
     if not all(math.isfinite(float(row[field])) for field in ("picai_score", "auroc", "lesion_ap")):
         raise ValueError(f"PI-CAI metrics are not finite: {row}")
 
     metrics.save(output_dir / "picai_metrics.json")
+    if has_grade_predictions:
+        with (output_dir / "grade_metrics.json").open("w") as file:
+            json.dump({key: value for key, value in row.items() if key.startswith("grade_")}, file, indent=2)
     with (output_dir / "metrics.csv").open("w", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=METRIC_FIELDS)
         writer.writeheader()

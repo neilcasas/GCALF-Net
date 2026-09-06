@@ -52,22 +52,24 @@ expected_checkout=$repo_dir/nndet
 grep -F "$expected_checkout" "$evidence_dir/m0/nndet-import.log" >/dev/null || die "nndet did not resolve to this checkout"
 run_logged "$evidence_dir/m0/tool-imports.log" python -c 'import picai_prep, picai_eval, medcam'
 
-[[ ! -e "$det_data/Task2201_PICAI_GGG" ]] || die "refusing to reuse existing M1 task: $det_data/Task2201_PICAI_GGG"
+[[ ! -e "$det_data/Task2201_PICAI_csPCa" ]] || die "refusing to reuse existing M1 task: $det_data/Task2201_PICAI_csPCa"
 [[ ! -e "$workspace/picai_m1_work" ]] || die "refusing to reuse existing M1 workspace: $workspace/picai_m1_work"
 run_logged "$evidence_dir/m1/download.log" "$repo_dir/cloud/vast/download_picai.sh" --source-dir "$workspace/source"
-m1_task=$det_data/Task2201_PICAI_GGG
+m1_task=$det_data/Task2201_PICAI_csPCa
 run_logged "$evidence_dir/m1/build.log" python -m gcalf_data.prepare_picai build \
     --images-dir "$workspace/source/picai_public_images" \
     --labels-root "$workspace/source/picai_labels" \
     --splits-json "$workspace/source/picai_baseline/src/picai_baseline/splits/picai_nnunet/splits.json" \
     --task-dir "$m1_task" --work-dir "$workspace/picai_m1_work"
-run_logged "$evidence_dir/m1/preprocess.log" nndet_prep Task2201_PICAI_GGG
+run_logged "$evidence_dir/m1/crop-retention.log" python -m gcalf_data.audit_crop_retention \
+    --task-dir "$m1_task" --expected-source-positive-count 425
+run_logged "$evidence_dir/m1/preprocess.log" nndet_prep Task2201_PICAI_csPCa
 run_logged "$evidence_dir/m1/install-splits.log" python -m gcalf_data.prepare_picai install-splits \
     --task-dir "$m1_task" --preprocessed-dir "$m1_task/preprocessed"
 run_logged "$evidence_dir/m1/sanity.log" python -m gcalf_data.sanity_checks \
     --task-dir "$m1_task" --marksheet "$workspace/source/picai_labels/clinical_information/marksheet.csv" \
     --plan-path "$m1_task/preprocessed/D3V001_3d.pkl" --report-path "$evidence_dir/m1/data_report.md"
 
-run_logged "$evidence_dir/m2/overfit.log" env RUN_GCALF_M2=1 GCALF_M2_TASK=Task2201_PICAI_GGG \
+run_logged "$evidence_dir/m2/overfit.log" env RUN_GCALF_M2=1 GCALF_M2_TASK=Task2201_PICAI_csPCa \
     python -m pytest -q -s tests/test_overfit.py
 run_logged "$evidence_dir/m3/smoke.log" bash scripts/run_m3_smoke.sh "$m1_task" "$det_data/$m3_task"

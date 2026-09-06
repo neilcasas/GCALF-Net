@@ -31,7 +31,7 @@ from nndet.utils.config import compose
 RUN_M2 = os.getenv("RUN_GCALF_M2") == "1"
 pytestmark = pytest.mark.skipif(not RUN_M2, reason="set RUN_GCALF_M2=1 to run the M2 GPU/data gate")
 
-TASK = os.getenv("GCALF_M2_TASK", "Task2201_PICAI_GGG")
+TASK = os.getenv("GCALF_M2_TASK", "Task2201_PICAI_csPCa")
 PLAN_ID = os.getenv("GCALF_M2_PLAN", "D3V001_3d")
 OVERFIT_STEPS = 200
 INITIAL_WINDOW = 10
@@ -60,7 +60,7 @@ def _load_runtime() -> Tuple[dict, dict, dict, Path, torch.device]:
         pytest.fail(f"M1 dataset metadata is missing: {task_dir / 'dataset.json'}")
 
     initialize_config_module(config_module="nndet.conf", version_base="1.1")
-    cfg = compose(TASK, "config.yaml", overrides=[])
+    cfg = compose(TASK, "config.yaml", overrides=["train=gcalf_baseline"])
     plan = load_pickle(plan_path)
     return (
         plan,
@@ -74,10 +74,11 @@ def _load_runtime() -> Tuple[dict, dict, dict, Path, torch.device]:
 def _assert_baseline_contract(plan: dict, model: torch.nn.Module) -> None:
     architecture = plan["architecture"]
     assert architecture["in_channels"] == 3
-    assert architecture["classifier_classes"] == 4
+    assert architecture["classifier_classes"] == 1
 
     encoder = model.encoder
     assert encoder.num_stages == 5
+    assert model.grade_head is not None
     assert isinstance(encoder.frequency_module, FrequencyDomainSeparationAndShunting3D)
     assert set(encoder.fusion_modules.keys()) == {str(level) for level in encoder.fusion_levels}
     for fusion in encoder.fusion_modules.values():
@@ -123,7 +124,8 @@ def _assert_forward_shapes(plan: dict, model: torch.nn.Module, device: torch.dev
     assert all(torch.isfinite(feature).all() for feature in encoder_outputs + decoder_outputs)
 
     expected_anchors = sum(anchor.shape[0] for anchor in anchors)
-    assert pred_detection["box_logits"].shape == (expected_anchors, 4)
+    assert pred_detection["box_logits"].shape == (expected_anchors, 1)
+    assert pred_detection["grade_logits"].shape == (expected_anchors, 4)
     assert pred_detection["box_deltas"].shape == (expected_anchors, 6)
     assert pred_seg["seg_logits"].shape[:2] == (1, 2)
     assert tuple(pred_seg["seg_logits"].shape[2:]) == tuple(decoder_outputs[0].shape[2:])
@@ -148,13 +150,16 @@ def _select_cases(data_dir: Path, task_dir: Path) -> Tuple[Dict, str, str, int]:
         if not instances and negative is None:
             negative = case_id
         if len(instances) == 1 and positive is None:
-            positive = case_id
-            positive_instance = int(instances[0])
+            instance_id = int(instances[0])
+            properties = load_pickle(dataset[case_id]["properties_file"])
+            if properties.get("grade_supervised", {}).get(str(instance_id), False):
+                positive = case_id
+                positive_instance = instance_id
         if positive is not None and negative is not None:
             break
 
     if positive is None:
-        pytest.fail("Fold 0 has no single-lesion positive case for the deterministic M2 overfit batch")
+        pytest.fail("Fold 0 has no single-lesion grade-supervised case for the deterministic M2 overfit batch")
     if negative is None:
         pytest.fail("Fold 0 has no zero-instance negative case for the deterministic M2 overfit batch")
     return dataset, positive, negative, positive_instance
@@ -184,6 +189,7 @@ def _make_fixed_microbatches(plan: dict, task_dir: Path, device: torch.device) -
         "data": torch.as_tensor(batch["data"], dtype=torch.float32, device=device),
         "target": torch.as_tensor(batch["seg"], dtype=torch.float32, device=device),
         "instance_mapping": batch["instance_mapping"],
+        "properties": batch["properties"],
     }
     return module_batch, {"positive_case": positive_case, "negative_case": negative_case}
 
@@ -193,6 +199,7 @@ def _prepare_microbatch(module, module_batch: dict, index: int) -> dict:
         "data": module_batch["data"][index:index + 1].clone(),
         "target": module_batch["target"][index:index + 1].clone(),
         "instance_mapping": [module_batch["instance_mapping"][index]],
+        "properties": [module_batch["properties"][index]],
     }
     with torch.no_grad():
         return module.pre_trafo(**batch)
@@ -203,6 +210,9 @@ def _loss_target(batch: dict) -> dict:
         "target_boxes": batch["boxes"],
         "target_classes": batch["classes"],
         "target_seg": batch["target"][:, 0],
+        "target_grades": batch["grades"],
+        "target_grade_supervised": batch["grade_supervised"],
+        "grade_class_weights": torch.ones(4, device=batch["data"].device),
     }
 
 
@@ -228,6 +238,10 @@ def _assert_memorized(model: torch.nn.Module, positive: dict, negative: dict) ->
         best_probabilities = probabilities[best_index]
         assert int(best_probabilities.argmax().item()) == target_class
         assert float(best_probabilities[target_class].item()) >= POSITIVE_PROBABILITY_MIN
+
+        grade_probabilities = torch.softmax(positive_prediction["grade_logits"][positive_indices], dim=1)
+        target_grade = int(positive["grades"][0][0].item()) - 2
+        assert float(grade_probabilities[:, target_grade].max().item()) >= POSITIVE_PROBABILITY_MIN
 
         negative_prediction, _, _ = model(negative["data"])
         maximum_negative_probability = torch.sigmoid(negative_prediction["box_logits"]).max().item()
@@ -261,8 +275,15 @@ def test_m2_baseline_forward_and_overfit_two_cases():
     positive = _prepare_microbatch(module, module_batch, 1)
     assert positive["boxes"][0].shape == (1, 6)
     assert negative["boxes"][0].numel() == 0
+    assert positive["grade_supervised"][0].tolist() == [True]
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optimizer.zero_grad(set_to_none=True)
+    benign_losses, _ = model.train_step(
+        images=negative["data"], targets=_loss_target(negative), evaluation=False, batch_num=0)
+    sum(benign_losses.values()).backward()
+    assert _gradient_norm(model.grade_head) == 0.0
+
     scaler = torch.cuda.amp.GradScaler()
     loss_history = []
     loss_components = {}
@@ -289,7 +310,7 @@ def test_m2_baseline_forward_and_overfit_two_cases():
 
         if step == 0:
             scaler.unscale_(optimizer)
-            for component in (model.encoder, model.head.classifier, model.head.regressor, model.segmenter):
+            for component in (model.encoder, model.head.classifier, model.head.regressor, model.segmenter, model.grade_head):
                 assert _gradient_norm(component) > 0
         scaler.step(optimizer)
         scaler.update()

@@ -4,8 +4,8 @@
 architecture split into milestones, each with one goal and one test that decides pass/fail. The
 step-by-step *how* is in `phases/PHASE_*.md`.
 
-**Rules.** Milestones are sequential; M4 (built baseline, full train) must close before M6 (LFF)
-or M7 (CAF) starts. A milestone closes only when its test runs and passes — not when the code
+**Rules.** Milestones are sequential; M4 (built baseline, full train) and M5 (the fold-0 budget
+decision) must close before M6 (LFF) or M7 (CAF) starts. A milestone closes only when its test runs and passes — not when the code
 "looks right." Every gate below is tagged **L** (runs in the pinned `gcalf:m0` image, CPU-only) or
 **V** (requires a GPU — Vast.ai). No **V** gate is evidence for a milestone whose **L** gate has
 not passed. See `docs/adr/0002-*.md` for why each milestone is shaped this way.
@@ -13,7 +13,7 @@ not passed. See `docs/adr/0002-*.md` for why each milestone is shaped this way.
 | M | Milestone | Phase | Goal | Gates |
 |---|---|---|---|---|
 | M0 | Environment | [0](phases/PHASE_0_environment.md) | `nndet`, PI-CAI tools, medcam all import; CUDA build verified | L, V |
-| M1 | Data pipeline | [1](phases/PHASE_1_data_pipeline.md) | Validated task: `csPCa` detection class (1,500 cases) + grade metadata (220+ audited lesions) | L |
+| M1 | Data pipeline | [1](phases/PHASE_1_data_pipeline.md) | Validated retained task: `csPCa` detection class, 1,500 source cases, explicit crop exclusions, and grade metadata (220+ audited lesions) | L |
 | M2 | Baseline build (FDSF + WAF) | [2](phases/PHASE_2_baseline.md) | Input-level FDSF built; WAF wired across the five-level encoder; `fusion_levels` profiled and frozen | L, V |
 | M3 | Baseline forward + overfit | [2](phases/PHASE_2_baseline.md) | Grade head loss routing correct; 2-case overfit drives loss to ~0 | L, V |
 | M4 ⭐ | Baseline full train | [2](phases/PHASE_2_baseline.md) | Real FDSF+WAF baseline numbers on PI-CAI — thesis's first result | V |
@@ -44,44 +44,41 @@ python -c "import picai_prep, picai_eval, medcam"
 ```bash
 docker run --rm --gpus all gcalf:m0 python -m pytest -q tests/test_csrc_cuda.py   # must run, not skip
 ```
-This has never passed (`docs/m0-verification.md` records the Docker/CDI failure that blocked it).
-Re-run it before trusting any downstream CUDA result.
+This gate passed on 2026-09-05; see `docs/m0-verification.md` for the mounted-checkout command and
+the historical CDI failure it supersedes. Re-run it after rebuilding the image or extension.
 **Blocks.** Everything. `csrc` is the #1 historical blocker — do not start M1 with a half-working env.
 
 ## M1 — Data pipeline
 
-**Goal.** A task with one `csPCa` detection foreground class over all 1,500 cases, and grade
+**Goal.** A task with one `csPCa` detection foreground class over every retained source case, and grade
 metadata (`grade`, `grade_source`, `grade_supervised`) on every positive instance — 220 baseline
 graded lesions plus whatever the unifocal linkage recovery audit (Phase 1) adds from the 205
 Pooch25 cases. Official 5-fold splits loaded and independently verified.
 
-**Known gap.** The label contract has been reworked, but `gcalf_data/preprocessing.py` still needs
-four changes before M1 can close:
-
-1. `resolve_crop_center` (`:76-107`) takes the lesion mask and can return `"union"` /
-   `"lesion_only"` centres — target leakage in validation/test preprocessing. Replace with a
-   whole-gland-only rule plus post-crop QC.
-2. The crop is a fixed **256 voxels** (`IN_PLANE_SIZE`), which is 60–160 mm of anatomy depending on
-   scanner. Replace with a fixed 128 mm field of view (ADR 0002 D6).
-3. `zscore_normalize` (`:205`) runs before nnDetection's own `nonCT` pass — delete it.
-4. Its docstrings (`:5`, `:81`, `:230`) cite "ARCHITECTURE.md Sec 3.3", which does not exist, and
-   describe the union/lesion-only fallbacks as sanctioned. Re-point them at `§3` and the current
-   contract as part of the same rework.
+**Current status.** The label and target-independent 128 mm preprocessing rework is implemented.
+The old local task must be rebuilt: it silently retained `11050_1001070` as an empty-label case
+after losing its lesion. `gcalf_data.audit_crop_retention.py` now records every source mask's
+stage-wise retention and removes fully lost source-positive cases from every fold before conversion.
+M1 remains open until a clean rebuild, planner run, and generated report verify that behaviour.
 
 **L gate.**
 ```bash
-python -m gcalf_data.sanity_checks    # all asserts green
+python -m gcalf_data.sanity_checks --task-dir "$det_data/Task2201_PICAI_csPCa" \
+  --marksheet ../picai_labels/clinical_information/marksheet.csv \
+  --plan-path "$det_data/Task2201_PICAI_csPCa/preprocessed/D3V001_3d.pkl" \
+  --report-path docs/data_report.md
 ```
 covering: identical spacing/orientation across T2W/ADC/HBV after resampling to a common grid;
 crop coordinates derived only from inference-available whole-gland/T2W information; no
 union/lesion-only crop path; the crop specified as a physical FOV, not a voxel count; all 425
-positives audited for voxel/component retention by a committed script, with any exclusion recorded
+source positives audited for voxel/component retention by a committed script, with any exclusion recorded
 under D6 item 7's predeclared rule; exactly one normalization pass;
 `dataset.json["labels"] == {"0": "csPCa"}`; every instance's detection class is `0`; every graded
 instance's `grade ∈ {2,3,4,5}`; instance-volume IDs == `case.json` keys; no `patient_id` crosses
 folds; every held-out fold contains every grade.
 **Closes when.** Sanity checks pass; `gcalf_data/audit_crop_retention.py` is committed and its
-128 mm re-audit reported; `docs/data_report.md` is regenerated and records the final
+128 mm re-audit reported; every declared exclusion is absent from raw data and every fold;
+`docs/data_report.md` is regenerated and records the final
 grade-supervised lesion count per grade plus the retention table; and the resolved nnDetection
 spacing, patch size, `nonCT` scheme, `use_mask_for_norm`, and asserted five-level plan are captured
 in the dataset manifest.

@@ -11,16 +11,15 @@ installed into `GCALF-Net/`'s dependencies or reported as a thesis result.
 `PDHD-Net/` stays pristine; install only one of the two (`nndet` package name collides).
 
 **Definition of done (exit criteria):**
-- [ ] **L:** `import nndet, nndet._C` succeeds and resolves to `GCALF-Net/nndet`, not `PDHD-Net/nndet`.
-- [ ] **L:** `python -m pytest -q tests/test_imports.py tests/test_encoder_cpu.py` passes.
-- [ ] **L:** `import picai_prep, picai_eval, medcam` succeeds.
-- [ ] **L:** a random-tensor forward pass through `nndet.arch.encoder.modular.Encoder` runs on CPU.
-- [ ] **V:** `tests/test_csrc_cuda.py` **runs** (not skip) in the GPU container. This has never
-      passed — `docs/m0-verification.md` records the Docker/NVIDIA-CDI failure that blocked it.
-      Re-attempt on the actual Vast.ai host before trusting any later CUDA gate.
-- [ ] `nndet/arch/encoder/gcalf/` scaffolding (`fdsf.py`, `waf.py`, `lff.py`, `caf.py`,
+- [x] **L:** `import nndet, nndet._C` succeeds and resolves to `GCALF-Net/nndet`, not `PDHD-Net/nndet`.
+- [x] **L:** `python -m pytest -q tests/test_imports.py tests/test_encoder_cpu.py` passes.
+- [x] **L:** `import picai_prep, picai_eval, medcam` succeeds.
+- [x] **L:** a random-tensor forward pass through `nndet.arch.encoder.modular.Encoder` runs on CPU.
+- [x] **V:** `tests/test_csrc_cuda.py` runs (not skips) in the GPU container; the passing record is
+      in `docs/m0-verification.md`.
+- [x] `nndet/arch/encoder/gcalf/` scaffolding (`fdsf.py`, `waf.py`, `lff.py`, `caf.py`,
       `grade_head.py`, `registry.py`) committed as empty modules on branch `feat/env-and-data`.
-- [ ] `environment.yml` + a sorted, non-editable `pip freeze` lock committed;
+- [x] `environment.yml` + a sorted, non-editable `pip freeze` lock committed;
       `docs/m0-verification.md` updated with the new attempt's outcome.
 
 ---
@@ -89,8 +88,8 @@ The local RTX 4050 is `sm_89`. The pinned CUDA 11.3 toolchain builds through `sm
    docker run --rm --gpus all gcalf:m0 python -m pytest -q tests
    ```
    The CUDA test must run, not skip; assert `torch.cuda.is_available()` first inside the
-   container. **This step has never succeeded** (`docs/m0-verification.md`) — treat it as an
-   open blocker, not a formality, until it does.
+   container. This gate passed on 2026-09-05; retain its log and rerun it after image or extension
+   rebuilds.
 6. **Scaffold the gcalf code tree** (empty modules + `__init__.py` for `fdsf.py`, `waf.py`,
    `lff.py`, `caf.py`, `grade_head.py`, `registry.py` — see `ARCHITECTURE.md §2`). Commit.
 

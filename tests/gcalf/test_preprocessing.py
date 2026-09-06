@@ -220,3 +220,30 @@ def test_preprocess_case_ignores_lesion_mask_when_choosing_crop_center():
     assert crop_strategy == "gland"
     # the crop was centered on the gland alone, so the distant lesion is clipped away entirely
     assert not np.any(sitk.GetArrayFromImage(out_mask) == 2)
+
+
+def test_preprocess_case_with_retention_records_complete_target_independent_crop_loss():
+    t2w = _image(np.ones((8, 40, 40), dtype=np.float32), spacing=(1.0, 1.0, 3.0))
+    adc = _image(np.ones((8, 40, 40), dtype=np.float32), spacing=(1.0, 1.0, 3.0))
+    hbv = _image(np.ones((8, 40, 40), dtype=np.float32), spacing=(1.0, 1.0, 3.0))
+    gland = np.zeros((8, 40, 40), dtype=np.uint8)
+    gland[:, 18:22, 18:22] = 1
+    lesion = np.zeros((8, 40, 40), dtype=np.uint8)
+    lesion[:, 35:38, 35:38] = 2
+
+    *_, crop_strategy, retention = preprocessing.preprocess_case_with_retention(
+        t2w,
+        adc,
+        hbv,
+        _mask_image(lesion),
+        _mask_image(gland),
+        target_fov_mm=8.0,
+        target_slice_spacing=6.0,
+        target_num_slices=4,
+    )
+
+    assert crop_strategy == "gland"
+    assert retention["source"]["voxels"] > 0
+    assert retention["resampled"]["voxels"] > 0
+    assert retention["inplane"]["voxels"] == 0
+    assert retention["final"]["voxels"] == 0

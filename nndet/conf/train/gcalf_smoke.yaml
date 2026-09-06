@@ -1,0 +1,20 @@
+# @package __global__
+defaults:
+  - smoke
+
+model_cfg:
+  encoder_kwargs:
+    gcalf_cfg:
+      frequency_filter_type: fdsf
+      fusion_type: waf
+      num_levels: 5
+      fusion_levels: [0, 1, 2, 3, 4]
+      fdsf:
+        radius: 0.15
+      waf:
+        window_size: [2, 7, 7]
+        num_heads: 4
+  head_grade_kwargs:
+    num_convs: 1
+    norm_channels_per_group: 16
+    norm_affine: true
