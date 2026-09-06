@@ -12,13 +12,12 @@ The supported protocol is **GGG2–5 lesion-level grading**, not GGG1–5: PI-CA
 (benign and GGG1) as spatial background, so no GGG1 mask exists to train on. The model has two
 heads:
 
-- **One detection class, `csPCa`** (clinically significant PCa, ISUP ≥2), trained on all 1,500
-  cases — 425 positives (any lesion with a positive spatial mask, graded or not) and 1,075
-  negatives (benign + GGG1).
+- **One detection class, `csPCa`** (clinically significant PCa, ISUP ≥2), trained on 1,499 retained
+  cases — 424 positives (any lesion with a positive spatial mask, graded or not) and 1,075
+  negatives (benign + GGG1). The source cohort has one declared exclusion.
 - **A separate 4-logit grade head**, trained only on lesions with a resolved GGG2–5 grade
-  (masked elsewhere). Of the 425 positives, 220 carry graded masks today
-  (`human_expert/original`); the rest are binary-only (`Pooch25`/`Bosma22a`) until Phase 1's
-  unifocal linkage-recovery audit resolves what it can.
+  (masked elsewhere). Of the 424 retained positives, 340 carry grade supervision. The remaining
+  118 positive instances are grade-unsupervised.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
 [`docs/adr/0002-ggg2-5-masked-grade-head-and-built-fdr-waf.md`](docs/adr/0002-ggg2-5-masked-grade-head-and-built-fdr-waf.md)

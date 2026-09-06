@@ -53,14 +53,12 @@ M0 runs `tests/test_imports.py`, `tests/test_encoder_cpu.py`, and `tests/test_cs
 skipped CUDA test is a failure. It also confirms that `nndet` resolves to this checkout and imports
 `picai_prep`, `picai_eval`, and `medcam`.
 
-The M1 download helper retrieves exactly the five archives from the original Zenodo record 6517398,
-resumes incomplete `curl` downloads, verifies the record's published MD5 checksums before extraction,
-and records the actual `picai_labels` and `picai_baseline` Git SHAs in
-`/workspace/source/SOURCE_REVISIONS.txt`. It clones and uses only the original granular expert
-labels, `marksheet.csv`, and `picai_nnunet/splits.json`; it does not use binary Pooch25 masks.
+The current M1 source is a pinned Kaggle mirror, not the documented Zenodo download. Record the
+Kaggle dataset reference, archive SHA-256, and the `picai_labels` and `picai_baseline` Git SHAs in
+`/workspace/source/SOURCE_REVISIONS.txt`. The Zenodo provenance record remains incomplete.
 
-M1 writes `/workspace/det_data/Task2201_PICAI_GGG`, installs official splits, and checks geometry,
-modalities, labels, instances, folds, patient separation, plus the three-input/four-foreground plan.
+M1 writes `/workspace/det_data/Task2201_PICAI_csPCa`, installs official splits, and checks geometry,
+modalities, labels, instances, folds, patient separation, plus the three-input/single-foreground plan.
 M2 preserves its initial/final loss, duration, loss components, and peak GPU memory in
 `evidence/m2/overfit.log`. M3 creates a new `Task900_PICAI_TINY` by default. If it fails, retain the
 partial task and model output for diagnosis; retry with `--m3-task Task901_PICAI_TINY` (or another
@@ -73,7 +71,7 @@ model tree (checkpoints, plan, predictions, and metrics):
 
 ```bash
 bash cloud/vast/export_results.sh \
-  --task-dir /workspace/det_data/Task2201_PICAI_GGG \
+  --task-dir /workspace/det_data/Task2201_PICAI_csPCa \
   --evidence-dir /workspace/evidence \
   --model-dir /workspace/det_models/Task900_PICAI_TINY/RetinaUNetV001_D3V001_3d \
   --export-dir /workspace/export

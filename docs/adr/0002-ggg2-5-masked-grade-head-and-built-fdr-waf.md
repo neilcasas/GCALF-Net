@@ -42,13 +42,13 @@ PI-CAI's own reference standard encodes ISUP ≤1 as background/non-csPCa, and G
 that definition. State the model as detecting **clinically significant PCa (csPCa, ISUP ≥2)** and
 grading it GGG2–5, not as a five-class model with one class removed.
 
-### D2 — Two-head model: csPCa detection (all 1,500 cases) + masked grade head (grade-supervised lesions only)
+### D2 — Two-head model: csPCa detection (1,499 retained cases) + masked grade head (grade-supervised lesions only)
 
 Supersedes ADR 0001 decision 1's implicit single-classifier framing and the four-class
 native-instance design of commits `cf3390b`/`1b18cab`. The model has:
 
-- **One detection foreground class, `csPCa`**, trained on all 425 human-annotated positives
-  (220 graded + 205 Pooch25 binary) plus all 1,075 benign/GGG1 negatives. This is nnDetection's
+- **One detection foreground class, `csPCa`**, trained on all 424 retained positives
+  (340 grade-supervised and 118 grade-unsupervised) plus all 1,075 benign/GGG1 negatives. This is nnDetection's
   existing anchor objectness + box regression + segmentation path, unchanged, using its existing
   sigmoid focal loss (background imbalance is what focal loss exists for — do not use CE here).
 - **A separate 4-logit grade head** over each matched positive detection, trained with
@@ -264,7 +264,7 @@ license to skip the pilot.
   references to adapt).
 - FDSF and WAF are also new code (D4); the integration surface is larger than ADR 0001 assumed.
 - Every downstream evaluation artifact (confusion matrix, FROC, Grad-CAM target) must report the
-  detection denominator (1,500 cases) and the grade-matched denominator (220–340 lesions)
+  detection denominator (1,499 retained cases) and the grade-matched denominator (340 lesions)
   side by side, never collapse them into one accuracy number.
 
 ## Rejected Alternatives

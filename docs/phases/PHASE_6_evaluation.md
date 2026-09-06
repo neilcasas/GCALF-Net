@@ -6,7 +6,7 @@ the defended significance test *and* patient-level bootstrap CIs (ADR 0002 D7); 
 comparison tables and figures answering SOPs 1–3.
 
 **Definition of done:**
-- [ ] **V:** picai_eval FROC/lesion-AUROC/case-level AUROC computed per config, over all 1,500 cases.
+- [ ] **V:** picai_eval FROC/lesion-AUROC/case-level AUROC computed per config, over all 1,499 retained cases.
 - [ ] **V:** 4×4 grade confusion matrix (grade-supervised matched lesions only), weighted F1
       (primary), macro-F1, per-grade sensitivity/precision, quadratic-weighted κ, per config —
       with misses and false positives reported alongside, never folded in.
@@ -19,13 +19,13 @@ comparison tables and figures answering SOPs 1–3.
 
 ---
 
-## 6.1 Detection / case-level — picai_eval, all 1,500 cases
+## 6.1 Detection / case-level — picai_eval, 1,499 retained cases
 
 `picai_eval/src/picai_eval/eval.py::evaluate` on detection maps from `scripts/predict.py`:
 - **FROC** (sensitivity vs. false-positives-per-case) — the PI-CAI standard.
 - **Lesion-level AUROC.**
 - **Case-level AUROC** — max lesion confidence per case, the standard PI-CAI benign-vs-csPCa
-  endpoint. This is free once detection works and uses the full 1,500-case cohort, unlike every
+  endpoint. This is free once detection works and uses the full 1,499-case retained cohort, unlike every
   grade metric below.
 - Answers "does it find clinically significant disease" for every config, independent of grading.
 - Report the number and disposition of gland-mask/crop-QC exceptions. The case set must be frozen
@@ -41,7 +41,7 @@ Per matched positive detection, restricted to lesions with `grade_supervised: tr
   beside it, not inside it**: missed lesions (unmatched grade-supervised ground truth, per grade)
   and false positives (unmatched detections, split by benign vs. positive case). State the
   matching criterion and score threshold used. Always report the grade-matched denominator next
-  to the full detection denominator (§6.1's 1,500) so a reader cannot mistake one for the other.
+  to the full detection denominator (§6.1's 1,499) so a reader cannot mistake one for the other.
 - **Weighted F1** — primary endpoint, per the thesis.
 - **Macro-F1**, balanced accuracy, per-grade sensitivity/recall and precision.
 - **GGG2 vs. GGG3 sensitivity** — call this out explicitly; it is the clinical threshold the
@@ -87,7 +87,7 @@ caf_only → CAF's contribution; baseline vs. gcalf_full → combined.
 - Confusion matrices (one per config, 4×4, normalized) + miss/false-positive counts beside each.
 - FROC curves (all configs, one axis).
 - Per-grade sensitivity bar chart (baseline vs. full, GGG2–5).
-- Case-level AUROC comparison (all four configs, full 1,500-case cohort).
+- Case-level AUROC comparison (all four configs, full 1,499-case retained cohort).
 - Master comparison table as CSV + rendered PNG/LaTeX.
 - Bootstrap CI plot per comparison (§6.5.2).
 - Crop-QC table: full/partial/failed retention, repaired or excluded cases, and confirmation that

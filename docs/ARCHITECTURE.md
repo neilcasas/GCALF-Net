@@ -105,7 +105,7 @@ lesion_ISUP: {0: 592, 1: 311, 2: 260, 3: 109, 4: 41, 5: 55}   (comma-separated p
 genuinely different grades across lesions in the same case — real information a case-level label
 would discard. This is why the prediction unit is the lesion, not the case.
 
-**Cohort roles** (all 1,500 cases train the detector; only graded lesions train the grade head):
+**Cohort roles** (1,499 retained cases train the detector; one source case is excluded; only graded lesions train the grade head):
 
 | Group | n | Detection role | Segmentation | Grade head |
 |---|---|---|---|---|
@@ -432,7 +432,7 @@ add a parallel head rather than reusing the anchor classifier's channel count).
 total_loss = objectness_loss + box_loss + segmentation_loss + grade_loss
 ```
 - `objectness_loss`, `box_loss`, `segmentation_loss`: nnDetection's existing sigmoid focal /
-  regression / Dice-CE paths, unchanged, over the single `csPCa` class, on all 1,500 cases.
+  regression / Dice-CE paths, unchanged, over the single `csPCa` class, on all 1,499 retained cases.
 - `grade_loss`: class-weighted cross-entropy over the 4 grade logits, computed **only** for
   matched positive detections with `grade_supervised: true`; masked (zero loss, zero gradient)
   for every other detection, including true positives on ungraded lesions and all negatives.
@@ -472,7 +472,7 @@ side by side (§10).
 
 ## 10. Evaluation plan
 
-- **Detection (all 1,500 cases):** `picai_eval` FROC + lesion-level AUROC + case-level AUROC
+- **Detection (1,499 retained cases):** `picai_eval` FROC + lesion-level AUROC + case-level AUROC
   (max lesion confidence per case — the standard PI-CAI benign-vs-csPCa endpoint, free once
   detection works).
 - **Grading (grade-supervised lesions only):** 4×4 confusion matrix over matched, grade-supervised

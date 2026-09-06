@@ -5,8 +5,8 @@ after a clean external PI-CAI task build, `nndet_prep`, and the crop-retention a
 generated report is committed because it contains cohort-derived experiment evidence; the command
 must be rerun for the exact retained task used in training.
 
-The generated report records: the `csPCa` detection-positive/negative case counts (all 1,500
-cases); the grade-supervised lesion count per GGG2–5 grade, including any recovered by the Phase 1
+The generated report records: the `csPCa` detection-positive/negative case counts (1,499 retained
+cases and one declared source exclusion); the grade-supervised lesion count per GGG2–5 grade, including any recovered by the Phase 1
 unifocal linkage audit; marksheet `case_ISUP` counts; and official fold sizes. It also records the
 fixed decisions that ISUP 0/1 (benign + GGG1) cases are zero-instance detection negatives, and
 that the binary `Pooch25`/`Bosma22a` masks are **detection-positive but grade-unsupervised** unless

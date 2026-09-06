@@ -573,7 +573,7 @@ visualizations are clinically acceptable based on PI-RADS version 2 criteria. Th
 
 The experimental phase compares four configurations built on one fixed five-level encoder and one common preprocessing/data contract: (1) the reconstructed paper-derived PDHD-Net control with input-level fixed 3D frequency-domain separation and shunting (FDSF) plus Window Attention Fusion (WAF), (2) LFF plus WAF, (3) fixed FDSF plus CAF, and (4) full GCALF-Net with LFF plus CAF. The released repository's wavelet/channel-light execution path is not mislabeled as the paper baseline. All model variants use the same PI-CAI cases, folds, preprocessing, five-level backbone, decoder, heads, schedule, and seeds; only the frequency and fusion factors differ.
 
-preprocessing steps and evaluation protocols to ensure a fair comparison. The detector retains nnDetection's focal loss over all 1,500 cases. For the separate grade head, inverse-frequency class weights are computed only from grade-supervised lesions in each fold's training partition and normalized to mean one; validation information and benign cases do not enter those weights. 
+preprocessing steps and evaluation protocols to ensure a fair comparison. The detector retains nnDetection's focal loss over all 1,499 retained cases. One source case is excluded after the crop audit. For the separate grade head, inverse-frequency class weights are computed only from grade-supervised lesions in each fold's training partition and normalized to mean one; validation information and benign cases do not enter those weights.
 
 50 
 
@@ -753,7 +753,7 @@ Specifically, a One-Way Analysis of Variance (ANOVA) was employed, followed by T
 
 ## **a. Area Under the Receiver Operating Characteristic Curve (AUROC)** 
 
-This metric is reported at two levels, which are never collapsed into one another. At the case level it measures how well the model separates csPCa-positive from negative cases across the full 1,500-case cohort, which is the binary form AUROC was designed for. At the grade level it measures how well the model distinguishes the four target Gleason Grade Group classes over grade-supervised matched lesions; since AUROC is originally designed for binary classification, a One-vs-Rest (OvR) approach is applied there, with each of GGG 2–5 evaluated against the other three. The formula for AUROC is presented in (3.1) 
+This metric is reported at two levels, which are never collapsed into one another. At the case level it measures how well the model separates csPCa-positive from negative cases across the 1,499-case retained cohort. One source case is excluded after the crop audit. At the grade level it measures how well the model distinguishes the four target Gleason Grade Group classes over grade-supervised matched lesions. Since AUROC is originally designed for binary classification, a One-vs-Rest (OvR) approach is applied there, with each of GGG 2–5 evaluated against the other three. The formula for AUROC is presented in (3.1)
 
 **==> picture [162 x 33] intentionally omitted <==**
 

@@ -1,6 +1,6 @@
 """Build the supervised PI-CAI csPCa nnDetection task and install its splits.
 
-All 1,500 cases train csPCa detection (a single foreground class); only
+The 1,499 retained cases train csPCa detection (a single foreground class); only
 grade-resolved lesions (human_expert masks directly, plus audit-recovered
 Pooch25 cases) additionally carry GGG2-5 grade metadata for the separate
 grade head (PHASE_1_data_pipeline.md; ADR 0002 D2).
