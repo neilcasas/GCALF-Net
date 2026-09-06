@@ -8,9 +8,9 @@ def test_mask_boundary_is_exact_and_inclusive():
     shape = (8, 8, 8)
     mask = FrequencyDomainSeparationAndShunting3D._radial_mask(shape, radius=0.15, device=torch.device("cpu"))
     d, h, w = shape
-    dd = torch.linspace(-1, 1, d).view(-1, 1, 1)
-    hh = torch.linspace(-1, 1, h).view(1, -1, 1)
-    ww = torch.linspace(-1, 1, w).view(1, 1, -1)
+    dd = torch.fft.fftshift(torch.fft.fftfreq(d))[:, None, None] * 2
+    hh = torch.fft.fftshift(torch.fft.fftfreq(h))[None, :, None] * 2
+    ww = torch.fft.fftshift(torch.fft.fftfreq(w))[None, None, :] * 2
     r = (dd**2 + hh**2 + ww**2).sqrt().expand(d, h, w)
     assert torch.all(mask[r <= 0.15] == 1.0)
     assert torch.all(mask[r > 0.15] == 0.0)
@@ -20,6 +20,20 @@ def test_mask_is_exactly_one_at_center_and_zero_beyond_a_zero_radius():
     mask = FrequencyDomainSeparationAndShunting3D._radial_mask((5, 5, 5), radius=0.0, device=torch.device("cpu"))
     assert mask[2, 2, 2] == 1.0
     assert mask.sum() == 1.0  # only r == 0 satisfies r <= 0
+
+
+def test_even_shape_places_dc_exactly_in_the_low_branch():
+    mask = FrequencyDomainSeparationAndShunting3D._radial_mask((8, 16, 16), radius=0.0, device=torch.device("cpu"))
+    assert mask[4, 8, 8] == 1.0
+    assert mask.sum() == 1.0
+
+
+def test_fixed_mask_has_hermitian_symmetry():
+    shape = (8, 16, 16)
+    mask = FrequencyDomainSeparationAndShunting3D._radial_mask(shape, radius=0.3, device=torch.device("cpu"))
+    unshifted = torch.fft.ifftshift(mask)
+    reflected = unshifted[(-torch.arange(shape[0])) % shape[0]][:, (-torch.arange(shape[1])) % shape[1]][:, :, (-torch.arange(shape[2])) % shape[2]]
+    assert torch.equal(unshifted, reflected)
 
 
 @pytest.mark.parametrize("shape", [(8, 16, 16), (9, 17, 17), (4, 8, 8), (5, 9, 9)])

@@ -1,0 +1,11 @@
+# @package __global__
+defaults:
+  - gcalf_baseline
+
+model_cfg:
+  encoder_kwargs:
+    gcalf_cfg:
+      frequency_filter_type: lff
+      lff:
+        radius: 0.15
+        delta_weight: 0.1

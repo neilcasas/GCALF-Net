@@ -178,6 +178,7 @@ def build_task(
         retention_record = make_record(case_id, crop_strategy, retention)
         crop_retention_records.append(retention_record)
 
+        note = ""
         excluded = retention_record["status"] == "excluded_no_retained_voxels"
         if excluded:
             note = " [excluded: gland-centred crop retained no lesion voxels]"

@@ -9,6 +9,8 @@ fixed by the paper's hypotheses, not a config choice.
 import torch
 import torch.nn as nn
 
+from nndet.arch.encoder.gcalf.frequency_mask import radial_frequency_mask
+
 
 class FrequencyDomainSeparationAndShunting3D(nn.Module):
     """Fixed spherical low/high FFT split applied once to the model input."""
@@ -29,9 +31,4 @@ class FrequencyDomainSeparationAndShunting3D(nn.Module):
 
     @staticmethod
     def _radial_mask(shape, radius, device):
-        d, h, w = shape
-        dd = torch.linspace(-1, 1, d, device=device).view(-1, 1, 1)
-        hh = torch.linspace(-1, 1, h, device=device).view(1, -1, 1)
-        ww = torch.linspace(-1, 1, w, device=device).view(1, 1, -1)
-        r = torch.sqrt(dd**2 + hh**2 + ww**2)
-        return (r <= radius).float()
+        return radial_frequency_mask(shape, radius, device)

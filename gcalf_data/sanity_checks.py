@@ -293,10 +293,8 @@ def write_report(
         "",
         "## Cohort limitations",
         "",
-        "cohort. State this explicitly wherever weighted F1 or the confusion matrix is reported.",
         "- Grade supervision never covers the full retained detection-training cohort. State this explicitly "
         "wherever weighted F1 or the confusion matrix is reported.",
-        "cohort. State this explicitly wherever weighted F1 or the confusion matrix is reported.",
         "- GGG4 and GGG5 are small even before folding; report per-grade counts and bootstrap CIs "
         "everywhere (Phase 6).",
         "- Multi-component or multi-marksheet-lesion Pooch25 cases that the audit could not resolve "

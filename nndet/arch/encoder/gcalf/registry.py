@@ -8,6 +8,7 @@ land, but selecting them today raises rather than importing a module that
 doesn't exist.
 """
 from nndet.arch.encoder.gcalf.fdsf import FrequencyDomainSeparationAndShunting3D
+from nndet.arch.encoder.gcalf.lff import LearnableFrequencyFilter3D
 from nndet.arch.encoder.gcalf.waf import build_waf
 
 
@@ -17,7 +18,7 @@ def build_frequency_module(kind, in_channels, options=None):
     if kind == "fdsf":
         return FrequencyDomainSeparationAndShunting3D(**options)
     if kind == "lff":
-        raise NotImplementedError("frequency_filter_type 'lff' is built in Phase 3 (M6)")
+        return LearnableFrequencyFilter3D(**options)
     raise ValueError(f"Unknown frequency_filter_type: {kind}")
 
 

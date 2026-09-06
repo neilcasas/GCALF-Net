@@ -182,6 +182,7 @@ def _train(
 
     assert cfg.host.parent_data is not None, 'Parent data can not be None'
     assert cfg.host.parent_results is not None, 'Output dir can not be None'
+    pl.seed_everything(int(cfg.exp.seed), workers=True)
 
     train_dir = init_train_dir(cfg)
 
