@@ -284,7 +284,10 @@ AWS CLI `s3 sync` supports `--endpoint-url`, include/exclude filters, and checks
 
 ## 9. Optional One-Time Cloud Preprocessing
 
-Normal training starts from a prepared version. If only raw PI-CAI data is available:
+Normal training starts from a prepared version. If only raw PI-CAI data is available, retrieve the
+images from the pinned operational Kaggle mirror
+`varshithpsingh/prostate-cancer-pi-cai-dataset/3`. PI-CAI remains the scientific source and
+attribution:
 
 1. Launch a storage-optimized VM; a GPU is not required for most conversion steps.
 2. Stage `datasets/raw/picai/<raw-version>` to local scratch and verify its source manifest.

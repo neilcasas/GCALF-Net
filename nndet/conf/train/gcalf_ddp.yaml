@@ -1,0 +1,15 @@
+# @package __global__
+defaults:
+  - gcalf_baseline
+
+# DDP preserves the planner's global batch size by splitting it over four ranks.
+# `scripts/train.py` rejects a plan whose batch size is not divisible by four.
+trainer_cfg:
+  gpus: 4
+  accelerator: ddp
+
+# CUDA/DDP ranks create the data module after model initialization.  Keep
+# augmentation in-process so batchgenerator workers are not forked after CUDA
+# has been initialized; transforms and the planner's global batch are unchanged.
+augment_cfg:
+  multiprocessing: false

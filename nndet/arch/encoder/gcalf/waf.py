@@ -12,6 +12,7 @@ WindowedCrossAttentionFusion3D uses for its own residual (ARCHITECTURE.md Sec
 7), so WAF vs CAF stays a single-variable swap (self-attention vs bidirectional
 cross-attention) with otherwise matching parameter shapes.
 """
+import torch
 import torch.nn as nn
 
 from nndet.arch.encoder.window_attention_fusion import WindowAttentionFusion
@@ -26,10 +27,17 @@ class WindowAttentionFusion3D(nn.Module):
         self.attn = WindowAttentionFusion(out_channels, window_size, num_heads)
 
     def forward(self, cnn_feat, swin_feat):
-        cnn = self.cnn_align(cnn_feat)
-        swin = self.swin_align(swin_feat)
-        aligned = cnn + swin
-        return self.attn(aligned) + cnn
+        # This attention is fed by independently-normalized CNN and Swin
+        # branches.  Keeping its QK/softmax path in fp32 prevents the first
+        # mixed-precision backward pass from overflowing before GradScaler can
+        # react; surrounding convolutions still use AMP normally.
+        output_dtype = cnn_feat.dtype
+        with torch.cuda.amp.autocast(enabled=False):
+            cnn = self.cnn_align(cnn_feat.float())
+            swin = self.swin_align(swin_feat.float())
+            aligned = cnn + swin
+            fused = self.attn(aligned) + cnn
+        return fused.to(output_dtype)
 
 
 def build_waf(cnn_channels, transformer_channels, out_channels, window_size=(2, 7, 7), num_heads=4):

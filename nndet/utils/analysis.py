@@ -229,6 +229,11 @@ def plot_joint_iou_score(all_pred_ious, all_pred_scores):
         if len(all_pred_scores) == 0:
             return None
         all_pred_scores = np.concatenate(all_pred_scores)
+    # A non-empty case list can still contain no retained predictions.  In
+    # that situation concatenation produces empty arrays and seaborn's
+    # regression plot raises instead of producing a useful diagnostic.
+    if np.asarray(all_pred_ious).size == 0 or np.asarray(all_pred_scores).size == 0:
+        return None
     plt.figure()
     f = sns.jointplot(x=all_pred_ious, y=all_pred_scores,
                       xlim=(-0.01, 1.01), ylim=(-0.01, 1.01), marginal_kws={"bins": 10},
@@ -387,32 +392,37 @@ def run_analysis_suite(prediction_dir: Path, gt_dir: Path, save_dir: Path):
         all_pred, all_target, all_pred_ious, all_pred_scores = collect_score_iou(
             prediction_dir, gt_dir, iou=iou, score=score)
         confusion_ax = plot_confusion_matrix(all_pred, all_target, iou=iou, score=score)
-        plt.savefig(_save_dir / "confusion_matrix.png")
+        if confusion_ax is not None:
+            plt.savefig(_save_dir / "confusion_matrix.png")
         plt.close()
 
         iou_score_ax = plot_joint_iou_score(all_pred_ious, all_pred_scores)
-        plt.savefig(_save_dir / "joint_iou_score.png")
+        if iou_score_ax is not None:
+            plt.savefig(_save_dir / "joint_iou_score.png")
         plt.close()
 
         all_pred, all_target, all_boxes = collect_boxes(
             prediction_dir, gt_dir, iou=iou, score=score)
         sizes_fig, sizes_ax = plot_sizes(all_pred, all_target, all_boxes, iou=iou, score=score)
-        plt.savefig(_save_dir / "sizes.png")
-        with open(str(_save_dir / 'sizes.pkl'), "wb") as fp:
-            pickle.dump(sizes_fig, fp, protocol=4)
+        if sizes_fig is not None:
+            plt.savefig(_save_dir / "sizes.png")
+            with open(str(_save_dir / 'sizes.pkl'), "wb") as fp:
+                pickle.dump(sizes_fig, fp, protocol=4)
         plt.close()
 
         sizes_fig, sizes_ax = plot_sizes_bar(all_pred, all_target, all_boxes, iou=iou, score=score)
-        plt.savefig(_save_dir / "sizes_bar.png")
-        with open(str(_save_dir / 'sizes_bar.pkl'), "wb") as fp:
-            pickle.dump(sizes_fig, fp, protocol=4)
+        if sizes_fig is not None:
+            plt.savefig(_save_dir / "sizes_bar.png")
+            with open(str(_save_dir / 'sizes_bar.pkl'), "wb") as fp:
+                pickle.dump(sizes_fig, fp, protocol=4)
         plt.close()
         
         sizes_fig, sizes_ax = plot_sizes_bar(all_pred, all_target, all_boxes,
                                              iou=iou, score=score, max_bin=100)
-        plt.savefig(_save_dir / "sizes_bar_100.png")
-        with open(str(_save_dir / 'sizes_bar_100.pkl'), "wb") as fp:
-            pickle.dump(sizes_fig, fp, protocol=4)
+        if sizes_fig is not None:
+            plt.savefig(_save_dir / "sizes_bar_100.png")
+            with open(str(_save_dir / 'sizes_bar_100.pkl'), "wb") as fp:
+                pickle.dump(sizes_fig, fp, protocol=4)
         plt.close()
 
 

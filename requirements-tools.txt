@@ -3,4 +3,5 @@
 picai_prep @ git+https://github.com/DIAGNijmegen/picai_prep.git@9544f73c8c4f986d9a2b7e2fe7f7b3ba717c3d5b
 picai_eval @ git+https://github.com/DIAGNijmegen/picai_eval.git@81d6067130cb264312ebcca220dd0784f074ae0e
 medcam @ git+https://github.com/MECLabTUDA/M3d-Cam.git@fddd001a6da20229d33a0cb7c5d594fa432763d9
+kaggle==1.6.17
 pytest

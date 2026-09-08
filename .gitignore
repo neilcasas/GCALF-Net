@@ -45,3 +45,6 @@ Thumbs.db
 *.npy
 *.npz
 *.ckpt
+
+# experiment evidence / exported artifacts (roadmap M11: stay out of git)
+evidence/

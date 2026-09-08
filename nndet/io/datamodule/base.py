@@ -112,6 +112,23 @@ class BaseModule(pl.LightningDataModule):
         for i in val_keys:
             self.dataset_val[i] = self.dataset[i]
 
+        world_size = int(self.augment_cfg.get("ddp_world_size", 1))
+        rank = int(self.augment_cfg.get("ddp_rank", 0))
+        if world_size > 1:
+            if not 0 <= rank < world_size:
+                raise ValueError(f"Invalid DDP rank {rank} for world size {world_size}")
+            self.dataset_tr = OrderedDict(list(self.dataset_tr.items())[rank::world_size])
+            self.dataset_val = OrderedDict(list(self.dataset_val.items())[rank::world_size])
+            if not self.dataset_tr or not self.dataset_val:
+                raise ValueError(
+                    f"DDP rank {rank} has an empty train or validation partition; "
+                    "use fewer GPUs or a larger split."
+                )
+            logger.info(
+                f"DDP rank {rank}/{world_size}: {len(self.dataset_tr)} training and "
+                f"{len(self.dataset_val)} validation cases"
+            )
+
     def create_new_split(self, splits_file: Path) -> None:
         """
         Create a new 5 fold split with a fixed seed

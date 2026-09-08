@@ -1068,6 +1068,9 @@ class BoxEnsemblerSelective(BoxEnsembler):
         boxes = [r.float().cpu() for r in result[self.box_key]]
         scores = [r.float().cpu() for r in result[self.score_key]]
         labels = [r.float().cpu() for r in result[self.label_key]]
+        grade_probs = result.get(self.grade_probs_key)
+        if grade_probs is not None:
+            grade_probs = [r.float().cpu() for r in grade_probs]
         centers = [box_center(img_boxes) if img_boxes.numel() > 0 else Tensor([]).to(img_boxes)
                    for img_boxes in boxes]
         tile_origins = [to for to in zip(*batch["tile_origin"])]
@@ -1082,6 +1085,8 @@ class BoxEnsemblerSelective(BoxEnsembler):
         self.model_results[self.model_current]["scores"].extend(scores)
         self.model_results[self.model_current]["labels"].extend(labels)
         self.model_results[self.model_current]["weights"].extend(weights)
+        if grade_probs is not None:
+            self.model_results[self.model_current]["grade_probs"].extend(grade_probs)
         # self.model_results[self.model_current]["crops"].extend(
         #     list(zip(*batch["crop"])))
 
@@ -1113,7 +1118,7 @@ class BoxEnsemblerSelective(BoxEnsembler):
             return Tensor([]).to(box_centers)
 
     def process_model(self, name: Hashable) ->\
-            Tuple[Tensor, Tensor, Tensor, Tensor]:
+            Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]:
         """
         Process the output of a single model on the whole scan
         topk candidates -> nms
@@ -1132,18 +1137,30 @@ class BoxEnsemblerSelective(BoxEnsembler):
         probs = cat(self.model_results[name]["scores"]).to(self.device)
         labels = cat(self.model_results[name]["labels"]).to(self.device)
         weights = cat(self.model_results[name]["weights"]).to(self.device)
+        grade_probs = None
+        if self.model_results[name].get("grade_probs"):
+            grade_probs = cat(self.model_results[name]["grade_probs"]).to(self.device)
 
-        return self.postprocess_image(
+        candidate_boxes, candidate_probs, candidate_labels = boxes, probs, labels
+        boxes, probs, labels, weights = self.postprocess_image(
             boxes=boxes,
             probs=probs,
             labels=labels,
             weights=weights,
             shape=tuple(self.properties["shape"]),
+        )
+        if grade_probs is not None:
+            grade_probs = self._match_grade_probs(
+                boxes, probs, labels,
+                candidate_boxes, candidate_probs, candidate_labels,
+                grade_probs,
             )
+        return boxes, probs, labels, weights, grade_probs
 
     def process_ensemble(self, boxes: List[Tensor], probs: List[Tensor],
                          labels: List[Tensor], weights: List[Tensor],
-                         ) -> Tuple[Tensor, Tensor, Tensor]:
+                         grade_probs: Optional[List[Tensor]] = None,
+                         ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor]]:
         """
         Ensemble predictions from multiple models
 
@@ -1164,6 +1181,7 @@ class BoxEnsemblerSelective(BoxEnsembler):
         probs = cat(probs, dim=0)
         labels = cat(labels, dim=0)
         weights = cat(weights, dim=0)
+        all_grade_probs = cat(grade_probs, dim=0) if grade_probs is not None else None
 
         _, idx = probs.sort(descending=True)
         idx = idx[:self.parameters["ensemble_topk"]]
@@ -1171,6 +1189,9 @@ class BoxEnsemblerSelective(BoxEnsembler):
         probs = probs[idx]
         labels = labels[idx]
         weights = weights[idx]
+        if all_grade_probs is not None:
+            all_grade_probs = all_grade_probs[idx]
+        candidate_boxes, candidate_probs, candidate_labels = boxes, probs, labels
 
         n_exp_preds = torch.tensor([num_models] * len(boxes)).to(boxes)
         boxes, probs, labels = self.parameters["ensemble_nms_fn"](
@@ -1180,7 +1201,15 @@ class BoxEnsemblerSelective(BoxEnsembler):
             n_exp_preds=n_exp_preds,
             score_thresh=self.parameters["ensemble_score_thresh"],
         )
-        return boxes.cpu(), probs.cpu(), labels.cpu()
+        if all_grade_probs is not None:
+            all_grade_probs = self._match_grade_probs(
+                boxes, probs, labels,
+                candidate_boxes=candidate_boxes,
+                candidate_scores=candidate_probs,
+                candidate_labels=candidate_labels,
+                candidate_grade_probs=all_grade_probs,
+            )
+        return boxes.cpu(), probs.cpu(), labels.cpu(), None if all_grade_probs is None else all_grade_probs.cpu()
 
     def save_state(self,
                    target_dir: Path,
@@ -1206,6 +1235,9 @@ class BoxEnsemblerSelective(BoxEnsembler):
             probs = cat(self.model_results[model]["scores"])
             labels = cat(self.model_results[model]["labels"])
             weights = cat(self.model_results[model]["weights"])
+            grade_probs = None
+            if self.model_results[model].get("grade_probs"):
+                grade_probs = cat(self.model_results[model]["grade_probs"])
 
             if len(probs) > self.parameters["model_topk"]:
                 _, idx_sorted = probs.sort(descending=True)
@@ -1214,5 +1246,7 @@ class BoxEnsemblerSelective(BoxEnsembler):
                 self.model_results[model]["scores"] = probs[idx_sorted]
                 self.model_results[model]["labels"] = labels[idx_sorted]
                 self.model_results[model]["weights"] = weights[idx_sorted]
+                if grade_probs is not None:
+                    self.model_results[model]["grade_probs"] = grade_probs[idx_sorted]
 
         return super().save_state(target_dir=target_dir, name=name, **kwargs)

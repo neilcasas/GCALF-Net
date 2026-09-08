@@ -127,6 +127,7 @@ def test_validate_plan_requires_three_modalities_and_five_encoder_levels(tmp_pat
             "classifier_classes": 1,
             "conv_kernels": [(3, 3, 3)] * 5,
             "strides": [(2, 2, 2)] * 4,
+            "decoder_levels": [1, 2, 3, 4],
         },
     }
     with plan_path.open("wb") as file:
@@ -138,4 +139,11 @@ def test_validate_plan_requires_three_modalities_and_five_encoder_levels(tmp_pat
     with plan_path.open("wb") as file:
         pickle.dump(plan, file)
     with pytest.raises(AssertionError, match="five-level"):
+        validate_plan(plan_path)
+
+    plan["architecture"]["conv_kernels"] = [(3, 3, 3)] * 5
+    plan["architecture"]["strides"] = [(2, 2, 2)] * 5
+    with plan_path.open("wb") as file:
+        pickle.dump(plan, file)
+    with pytest.raises(AssertionError, match="four encoder transitions"):
         validate_plan(plan_path)

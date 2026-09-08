@@ -2,12 +2,11 @@
 
 modular.py calls only build_frequency_module(...) and build_fusion_module(...);
 it never names a concrete FDSF/LFF or WAF/CAF class directly (ARCHITECTURE.md
-Sec 4). LFF (Phase 3, M6) and CAF (Phase 4, M7) are not built yet -- their kind
-strings are reserved here so the config surface doesn't change again when they
-land, but selecting them today raises rather than importing a module that
-doesn't exist.
+Sec 4). LFF remains reserved for Phase 3; CAF is the implemented Phase 4
+bidirectional cross-attention branch.
 """
 from nndet.arch.encoder.gcalf.fdsf import FrequencyDomainSeparationAndShunting3D
+from nndet.arch.encoder.gcalf.caf import build_caf
 from nndet.arch.encoder.gcalf.waf import build_waf
 
 
@@ -26,5 +25,5 @@ def build_fusion_module(kind, cnn_channels, transformer_channels, out_channels, 
     if kind == "waf":
         return build_waf(cnn_channels, transformer_channels, out_channels, **options)
     if kind == "caf":
-        raise NotImplementedError("fusion_type 'caf' is built in Phase 4 (M7)")
+        return build_caf(cnn_channels, transformer_channels, out_channels, **options)
     raise ValueError(f"Unknown fusion_type: {kind}")

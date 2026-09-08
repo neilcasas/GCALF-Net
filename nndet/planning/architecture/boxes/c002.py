@@ -53,6 +53,17 @@ class BoxC002(BoxC001):
         self.min_feature_map_size = 8 if self.dim == 2 else 4
         self.num_decoder_level = 5 if self.dim == 2 else 4
 
+        # `max_num_pool` counts transitions; the plan contains one additional
+        # input-resolution convolution stage. Keep GCALF's resolved plan aligned
+        # with its explicitly configured encoder-level contract.
+        encoder_kwargs = (self.model_cfg or {}).get("encoder_kwargs", {})
+        gcalf_cfg = encoder_kwargs.get("gcalf_cfg")
+        if gcalf_cfg is not None:
+            num_levels = int(gcalf_cfg.get("num_levels", 5))
+            if num_levels < 2:
+                raise ValueError(f"GCALF-Net requires at least two encoder levels, got {num_levels}")
+            self.max_num_pool = num_levels - 1
+
     def get_anchor_init(self, boxes: torch.Tensor) -> Sequence[Sequence[int]]:
         """
         Initialize anchors sizes for optimization

@@ -32,7 +32,7 @@ def _write_label(directory, case_id, array):
     sitk.WriteImage(sitk.GetImageFromArray(np.asarray(array, dtype=np.uint8)), str(directory / f"{case_id}.nii.gz"))
 
 
-def test_boxes_to_detection_map_uses_maximum_score_and_clips_bounds():
+def test_boxes_to_detection_map_uses_one_maximum_score_per_connected_candidate():
     detection_map = boxes_to_detection_map(
         {
             "original_size_of_raw_data": np.asarray([4, 4, 4]),
@@ -42,8 +42,10 @@ def test_boxes_to_detection_map_uses_maximum_score_and_clips_bounds():
         }
     )
     assert detection_map.shape == (4, 4, 4)
+    # The overlapping boxes form one lesion candidate, which PI-CAI requires
+    # to have a single confidence throughout its connected component.
     assert detection_map[1, 1, 1] == pytest.approx(0.8)
-    assert detection_map[0, 0, 0] == pytest.approx(0.2)
+    assert detection_map[0, 0, 0] == pytest.approx(0.8)
 
 
 def test_run_evaluation_writes_finite_metrics_and_rejects_case_mismatch(tmp_path):

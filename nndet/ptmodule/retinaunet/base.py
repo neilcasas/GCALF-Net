@@ -160,15 +160,14 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                 )
             )
 
-        # 设置eval_score_key（根据评估模式）
-        if use_centroid:
-            # 质心距离模式：mAP_IoU_{min_sim}_{max_sim}_0.05_MaxDet_100
-            # fast=False时: iou_range=(0.135, 0.9, 0.05) => mAP_IoU_0.14_0.90_0.05
-            # 对应距离范围：20mm (~0.135) to ~1mm (0.9)
-            self.eval_score_key = "mAP_IoU_0.14_0.90_0.05_MaxDet_100"
-        else:
-            # IoU模式
-            self.eval_score_key = "mAP_IoU_0.10_0.50_0.05_MaxDet_100"
+        # ``BoxSweeper`` deliberately evaluates with ``fast=True`` and does
+        # not use the full-validation centroid evaluator configured above.
+        # Its stable metric key is therefore the fast IoU mAP key.  Keeping
+        # this explicit avoids asking the sweep for the full-validation key,
+        # which is absent even when the sweep predictions are valid.
+        self.eval_score_key = self.trainer_cfg.get(
+            "sweep_metric", "mAP_IoU_0.10_0.50_0.05_MaxDet_100"
+        )
 
     @staticmethod
     def compute_grade_class_weights(dataset) -> torch.Tensor:
@@ -342,11 +341,35 @@ class RetinaUNetModule(LightningBaseModuleSWA):
         self.evaluation_end()
         return super().validation_epoch_end(validation_step_outputs)
 
+    def _merge_distributed_evaluators(self) -> None:
+        """Collect rank-local validation caches before nonlinear metric calculation."""
+        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+            return
+
+        world_size = torch.distributed.get_world_size()
+        box_results = [None] * world_size
+        torch.distributed.all_gather_object(box_results, self.box_evaluator.results_list)
+        self.box_evaluator.results_list = [
+            result for rank_results in box_results for result in rank_results
+        ]
+
+        local_seg_results = {
+            key: list(value) for key, value in self.seg_evaluator.results_list.items()
+        }
+        seg_results = [None] * world_size
+        torch.distributed.all_gather_object(seg_results, local_seg_results)
+        merged_seg_results = defaultdict(list)
+        for rank_results in seg_results:
+            for key, value in rank_results.items():
+                merged_seg_results[key].extend(value)
+        self.seg_evaluator.results_list = merged_seg_results
+
     def evaluation_end(self):
         """
         Uses the cached values from `evaluation_step` to perform the evaluation
         of the epoch
         """
+        self._merge_distributed_evaluators()
         metric_scores, metric_curves = self.box_evaluator.finish_online_evaluation()
         self.box_evaluator.reset()
 

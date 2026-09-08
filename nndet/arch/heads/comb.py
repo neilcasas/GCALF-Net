@@ -155,6 +155,11 @@ class DetectionHead(AbstractHead):
             "pred_boxes": self.coder.decode(prediction["box_deltas"], anchors),
             "pred_probs": self.classifier.box_logits_to_probs(prediction["box_logits"]),
         }
+        # Grade logits are produced at the same anchor locations as detection
+        # logits. Keep them through detection-head postprocessing so RetinaNet
+        # can select the grade probability of every retained detection.
+        if "grade_logits" in prediction:
+            postprocess_predictions["grade_logits"] = prediction["grade_logits"]
         return postprocess_predictions
 
 

@@ -29,6 +29,15 @@ done
 [[ "$m3_task" =~ ^Task9[0-9][0-9]_PICAI_TINY$ ]] || die "--m3-task must be an unused Task9xx_PICAI_TINY identifier"
 [[ -f "$repo_dir/cloud/vast/download_picai.sh" ]] || die "--repo-dir is not this checkout: $repo_dir"
 
+if [[ -n "${GCALF_CONDA_ENV:-}" ]]; then
+    [[ -f /opt/conda/etc/profile.d/conda.sh ]] || die "Conda activation script is unavailable"
+    # shellcheck disable=SC1091
+    source /opt/conda/etc/profile.d/conda.sh
+    conda activate "$GCALF_CONDA_ENV"
+    torch_lib=$(python -c 'import os, torch; print(os.path.join(os.path.dirname(torch.__file__), "lib"))')
+    export LD_LIBRARY_PATH="$torch_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
 export det_data=${det_data:-$workspace/det_data}
 export det_models=${det_models:-$workspace/det_models}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
@@ -57,19 +66,31 @@ run_logged "$evidence_dir/m0/tool-imports.log" python -c 'import picai_prep, pic
 run_logged "$evidence_dir/m1/download.log" "$repo_dir/cloud/vast/download_picai.sh" --source-dir "$workspace/source"
 m1_task=$det_data/Task2201_PICAI_csPCa
 run_logged "$evidence_dir/m1/build.log" python -m gcalf_data.prepare_picai build \
-    --images-dir "$workspace/source/picai_public_images" \
+    --images-dir "$workspace/source/picai_public_images/picai_public_images_fold0" \
+    --images-dir "$workspace/source/picai_public_images/picai_public_images_fold1" \
+    --images-dir "$workspace/source/picai_public_images/picai_public_images_fold2" \
+    --images-dir "$workspace/source/picai_public_images/picai_public_images_fold3" \
+    --images-dir "$workspace/source/picai_public_images/picai_public_images_fold4" \
     --labels-root "$workspace/source/picai_labels" \
-    --splits-json "$workspace/source/picai_baseline/src/picai_baseline/splits/picai_nnunet/splits.json" \
+    --splits-json "$workspace/source/picai_baseline/src/picai_baseline/splits/picai/splits.json" \
     --task-dir "$m1_task" --work-dir "$workspace/picai_m1_work"
 run_logged "$evidence_dir/m1/crop-retention.log" python -m gcalf_data.audit_crop_retention \
     --task-dir "$m1_task" --expected-source-positive-count 425
-run_logged "$evidence_dir/m1/preprocess.log" nndet_prep Task2201_PICAI_csPCa
+run_logged "$evidence_dir/m1/preprocess.log" nndet_prep Task2201_PICAI_csPCa -o train=gcalf_baseline
 run_logged "$evidence_dir/m1/install-splits.log" python -m gcalf_data.prepare_picai install-splits \
     --task-dir "$m1_task" --preprocessed-dir "$m1_task/preprocessed"
 run_logged "$evidence_dir/m1/sanity.log" python -m gcalf_data.sanity_checks \
     --task-dir "$m1_task" --marksheet "$workspace/source/picai_labels/clinical_information/marksheet.csv" \
     --plan-path "$m1_task/preprocessed/D3V001_3d.pkl" --report-path "$evidence_dir/m1/data_report.md"
+run_logged "$evidence_dir/m2/unpack.log" python scripts/unpack_preprocessed.py \
+    "$m1_task/preprocessed/D3V001_3d/imagesTr" --processes "${GCALF_UNPACK_PROCESSES:-8}"
 
-run_logged "$evidence_dir/m2/overfit.log" env RUN_GCALF_M2=1 GCALF_M2_TASK=Task2201_PICAI_csPCa \
+run_logged "$evidence_dir/m2/fusion-profile.log" python scripts/profile_gcalf_fusion.py \
+    --task Task2201_PICAI_csPCa --plan-path "$m1_task/preprocessed/D3V001_3d.pkl" \
+    --output "$evidence_dir/m2/fusion-profile.json"
+frozen_fusion_levels=$(python -c 'import json, sys; print(",".join(map(str, json.load(open(sys.argv[1]))["selected_fusion_levels"])))' \
+    "$evidence_dir/m2/fusion-profile.json")
+run_logged "$evidence_dir/m2/overfit.log" env RUN_GCALF_M2=1 GCALF_M2_TASK=Task2201_PICAI_csPCa GCALF_FUSION_LEVELS="$frozen_fusion_levels" \
     python -m pytest -q -s tests/test_overfit.py
-run_logged "$evidence_dir/m3/smoke.log" bash scripts/run_m3_smoke.sh "$m1_task" "$det_data/$m3_task"
+run_logged "$evidence_dir/m3/smoke.log" env GCALF_FUSION_LEVELS="$frozen_fusion_levels" \
+    bash scripts/run_m3_smoke.sh "$m1_task" "$det_data/$m3_task"

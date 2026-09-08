@@ -52,7 +52,7 @@ accepts for self-attention.
 ```text
 CNN output  = Attention(Q=cnn,  K=swin, V=swin)
 Swin output = Attention(Q=swin, K=cnn,  V=cnn)
-Fusion      = projection([cnn residual, CNN output, Swin output])
+Fusion      = projection(CNN output + Swin output) + cnn residual
 ```
 This is materially different from WAF's single self-attention pass over one aligned feature, and
 from independent SE/spatial gates or a Hadamard product (TransFuse BiFusion).
@@ -104,7 +104,7 @@ class WindowedCrossAttentionFusion3D(nn.Module):
         )
         self.norm = nn.LayerNorm(out_channels)
         self.out_proj = nn.Sequential(
-            nn.Conv3d(out_channels * 2, out_channels, 1, bias=False),
+            nn.Conv3d(out_channels, out_channels, 1, bias=False),
             nn.InstanceNorm3d(out_channels),
             nn.ReLU(inplace=True),
         )
@@ -123,16 +123,15 @@ class WindowedCrossAttentionFusion3D(nn.Module):
         # attention terms only: `cnn` re-enters once, as the residual below
         fused_w = self.norm(cnn_cross + swin_cross)
         fused = window_reverse_3d(fused_w, metadata)
-        return self.out_proj(torch.cat([cnn, fused], dim=1)) + cnn
+        return self.out_proj(fused) + cnn
 ```
 
 **Count the CNN path exactly once.** A defect of this exact shape has already been documented
-twice in this codebase's history (`fused_w = norm(cnn_w + cnn_cross + swin_cross)` *and* the
-concat *and* the trailing `+ cnn` — tripling the aligned feature — was the earlier draft's bug;
-the same class of error is called out for LFF's identity-plus-residual trap,
-`PHASE_3_lff.md §3.3`). Keep the attention outputs in `fused_w` and let `cnn` reach the output
-through the concat and the single trailing residual. If a pre-norm residual inside the window is
-preferred instead, remove the trailing `+ cnn` — one path, not two, either way.
+twice in this codebase's history (`fused_w = norm(cnn_w + cnn_cross + swin_cross)` plus a trailing
+`+ cnn` doubles the aligned feature); the same class of error is called out for LFF's
+identity-plus-residual trap, `PHASE_3_lff.md §3.3`. Keep `fused_w` attention-only and pass `cnn`
+only through the trailing residual. Concatenating `cnn` before the output projection would create a
+second CNN path, so it is intentionally excluded from CAF.
 
 Confirm `batch_first=True` and `need_weights=False` behave as expected in the pinned PyTorch 1.10
 image; transpose to `(tokens,batch,channels)` explicitly if `batch_first` is unavailable in that
@@ -161,6 +160,14 @@ model_cfg:
 ```
 The registry receives the stage channel count and may derive `num_heads` per stage when one
 constant is invalid. Store resolved per-stage values in the experiment snapshot.
+
+Profile this arm with the same script and headroom criterion used for WAF, explicitly selecting
+the CAF Hydra configuration so its measurements cannot be substituted with the baseline profile:
+
+```bash
+python scripts/profile_gcalf_fusion.py --task Task2201_PICAI_csPCa \
+  --plan-path "$PLAN_PATH" --train-config gcalf_caf --output "$EVIDENCE/caf-fusion-profile.json"
+```
 
 ## 4.6 Tests and profiling (`tests/gcalf/test_caf.py`)
 
@@ -210,5 +217,8 @@ only CAF while leaving the WAF control at different fusion locations.
 
 **Deliverables:** `nndet/arch/encoder/gcalf/caf.py`, fusion registry entry, Hydra config, tests,
 stage profile, tiny metrics, resolved architecture snapshot.
+
+Run the tiny end-to-end gate with `GCALF_TRAIN_CONFIG=gcalf_caf_smoke`; this avoids accidentally
+validating the WAF default while labelling the result as CAF.
 
 **Next:** `PHASE_5_integration_ablation.md`.

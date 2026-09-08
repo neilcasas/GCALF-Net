@@ -12,6 +12,11 @@ required dropping every ungraded positive lesion (all 205 Pooch25 cases) to have
 it to. Nothing here invents a GGG1 or benign foreground class: PI-CAI's own reference standard
 encodes ISUP ≤1 as background, and this task follows that standard.
 
+**Operational image source.** Download the image archive only from the pinned Kaggle mirror
+[`varshithpsingh/prostate-cancer-pi-cai-dataset`, version 3](https://www.kaggle.com/datasets/varshithpsingh/prostate-cancer-pi-cai-dataset).
+PI-CAI remains the scientific data source and attribution. `cloud/vast/download_picai.sh` records
+the archive digest and pins `picai_labels` and `picai_baseline` to their required revisions.
+
 ## Current implementation status
 
 The single-class detection and masked GGG2–5 metadata contract is implemented. The remaining M1
@@ -43,7 +48,7 @@ This audit requires SimpleITK/numpy connected-component labeling (`scipy.ndimage
 ## 1.2 Pipeline
 
 1. Pass the PI-CAI public MHA archive and `picai_labels` checkout to a rebuilt
-   `gcalf_data.prepare_picai build`, with the official `picai_nnunet/splits.json`.
+   `gcalf_data.prepare_picai build`, with the official all-case `picai/splits.json`.
 2. Build the three-channel nnU-Net data (`_0000`=T2W, `_0001`=ADC, `_0002`=HBV — assert this
    order). Apply the preprocessing contract from `ARCHITECTURE.md §3` identically for training,
    validation, test, and deployment:
@@ -76,15 +81,15 @@ This audit requires SimpleITK/numpy connected-component labeling (`scipy.ndimage
    from the raw task and every fold under ADR 0002 D6 item 7; it is never relabelled as benign.
    Partial clips remain reported. Ground-truth-guided recentering is never a remedy.
 5. `nnunet2nndet` → nnDetection task layout. **The task's own geometry (step 2) is the raw input
-   — do not hand-plan spacing/patch size a second time.** Run `nndet_prep Task2201_PICAI_csPCa`;
+   — do not hand-plan spacing/patch size a second time.** Run `nndet_prep Task2201_PICAI_csPCa -o train=gcalf_baseline`;
    let its planner derive spacing and patch size, and record the resolved plan values (not your
    input geometry) in the dataset manifest.
    Record the planner's resolved `nonCT` normalization, target spacing, patch size, level count,
    per-level strides/kernels/channels, and decoder inputs. **Assert, do not merely record**, that
    `len(conv_kernels) == 5`: the count is planner-derived from patch size and spacing
-   (`nndet/planning/architecture/boxes/c002.py:196-204`). If it resolves to six, stop and resolve it
-   once at the planning level — adjust the raw-task geometry or pin `conv_kernels`/`strides` in the
-   plan, record which in the manifest, and use that plan for all four arms. Never patch it per run.
+   (`nndet/planning/architecture/boxes/c002.py:196-204`). The GCALF planner derives its four pooling
+   transitions from `gcalf_cfg.num_levels=5`; if it resolves to any other count, stop and resolve it
+   at the planning level. Never patch a generated plan per run.
    Note also that `nndet_prep` runs `crop_to_nonzero` (`nndet/io/crop.py:288`) first, so the padded
    raw-task array is not what the planner sees.
 6. `prepare_picai install-splits` writes the official folds to `preprocessed/splits_final.pkl`.

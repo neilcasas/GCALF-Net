@@ -189,6 +189,9 @@ def validate_plan(plan_path: Path) -> dict:
     assert architecture["in_channels"] == 3
     assert architecture["classifier_classes"] == 1
     assert len(architecture["conv_kernels"]) == 5, "GCALF-Net requires a five-level planned encoder"
+    assert len(architecture["strides"]) == 4, "GCALF-Net requires four encoder transitions"
+    assert len(architecture["strides"]) == len(architecture["conv_kernels"]) - 1
+    assert all(0 <= level < len(architecture["conv_kernels"]) for level in architecture["decoder_levels"])
     assert len(plan["patch_size"]) == 3
     assert len(plan["target_spacing"]) == 3
     assert set(plan["normalization_schemes"].values()) == {"nonCT"}
@@ -220,6 +223,7 @@ def write_manifest(task_dir: Path, plan_path: Path, cases: List[str]) -> Path:
         "splits_sha256": _sha256(task_dir / "splits.json"),
         "crop_retention_sha256": _sha256(task_dir / "crop_retention.csv"),
         "excluded_cases_sha256": _sha256(task_dir / "excluded_cases.json"),
+        "crop_strategy_exceptions_sha256": _sha256(task_dir / "crop_strategy_exceptions.json"),
         "target_spacing": _json_value(plan["target_spacing"]),
         "patch_size": _json_value(plan["patch_size"]),
         "normalization_schemes": _json_value(plan["normalization_schemes"]),
@@ -243,6 +247,7 @@ def write_report(
     splits: List[Dict[str, List[str]]],
     crop_records: List[Dict[str, object]],
     exclusions: set,
+    crop_strategy_exceptions: Dict[str, str],
 ) -> None:
     marksheet = marksheet_summary(marksheet_path)
     retention = summarize(crop_records)
@@ -260,6 +265,8 @@ def write_report(
         "positive lesions -- never the full detection-training cohort.",
         "- ISUP 0 and 1 cases remain zero-instance negatives; no benign or GGG1 foreground class is created.",
         "- Modalities: T2W, ADC, HBV/high-b DWI (`_0000`, `_0001`, `_0002`).",
+        f"- Gland-centred crop fallbacks: {len(crop_strategy_exceptions)} "
+        "(all non-gland strategies are listed in `crop_strategy_exceptions.json`).",
         "",
         "## Grade-supervised instance counts",
         "",
@@ -293,10 +300,8 @@ def write_report(
         "",
         "## Cohort limitations",
         "",
-        "cohort. State this explicitly wherever weighted F1 or the confusion matrix is reported.",
         "- Grade supervision never covers the full retained detection-training cohort. State this explicitly "
         "wherever weighted F1 or the confusion matrix is reported.",
-        "cohort. State this explicitly wherever weighted F1 or the confusion matrix is reported.",
         "- GGG4 and GGG5 are small even before folding; report per-grade counts and bootstrap CIs "
         "everywhere (Phase 6).",
         "- Multi-component or multi-marksheet-lesion Pooch25 cases that the audit could not resolve "
@@ -321,6 +326,11 @@ def main() -> None:
     split_case_ids = {case_id for split in splits for key in ("train", "val") for case_id in split[key]}
     crop_records = validate_audit(args.task_dir, raw_case_ids, split_case_ids)
     exclusions = load_exclusions(args.task_dir)
+    with (args.task_dir / "crop_strategy_exceptions.json").open() as file:
+        crop_strategy_exceptions = json.load(file)
+    assert isinstance(crop_strategy_exceptions, dict), "Crop strategy exceptions must be a JSON object"
+    assert all(isinstance(case_id, str) and isinstance(strategy, str)
+               for case_id, strategy in crop_strategy_exceptions.items())
     validate_marksheet_positive_cases(args.task_dir, args.marksheet, exclusions, crop_records)
     validate_held_out_grades(args.task_dir, splits)
     if args.plan_path:
@@ -335,6 +345,7 @@ def main() -> None:
             splits,
             crop_records,
             exclusions,
+            crop_strategy_exceptions,
         )
     print("All PI-CAI M1 sanity checks passed.")
 

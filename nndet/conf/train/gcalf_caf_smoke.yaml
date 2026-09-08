@@ -1,0 +1,12 @@
+# @package __global__
+defaults:
+  - gcalf_smoke
+
+model_cfg:
+  encoder_kwargs:
+    gcalf_cfg:
+      fusion_type: caf
+      caf:
+        window_size: [2, 7, 7]
+        num_heads: 4
+        dropout: 0.0

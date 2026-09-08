@@ -597,7 +597,7 @@ This study employs a 2×2 ablation design to evaluate the individual and combine
 
 ## **1. Planning Phase** 
 
-During the planning stage, the researchers identified the study objectives and formulated hypotheses to guide the research. The PI-CAI Grand Challenge public training and development dataset was selected as the exclusive data source. It contains 1,500 multi-centre biparametric MRI examinations with T2W, ADC, and HBV. The study detects clinically significant prostate cancer (csPCa, ISUP ≥2) with one foreground detection class and grades only spatially resolved positive lesions as
+During the planning stage, the researchers identified the study objectives and formulated hypotheses to guide the research. The PI-CAI Grand Challenge public training and development dataset was selected as the exclusive scientific data source. It contains 1,500 multi-centre biparametric MRI examinations with T2W, ADC, and HBV. For reproducible transfer, its images are operationally retrieved from the pinned Kaggle mirror `varshithpsingh/prostate-cancer-pi-cai-dataset`, version 3; this does not change PI-CAI attribution or the study cohort. The study detects clinically significant prostate cancer (csPCa, ISUP ≥2) with one foreground detection class and grades only spatially resolved positive lesions as
 
 52 
 

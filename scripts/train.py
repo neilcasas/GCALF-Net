@@ -27,6 +27,7 @@ import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import MLFlowLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+from pytorch_lightning.plugins import DDPPlugin
 
 from loguru import logger
 from hydra import initialize_config_module
@@ -45,6 +46,8 @@ from nndet.evaluator.registry import save_metric_output, evaluate_box_dir, \
     evaluate_case_dir, evaluate_seg_dir
 from nndet.inference.ensembler.base import extract_results
 from nndet.ptmodule import MODULE_REGISTRY
+
+SCRIPT_PATH = Path(__file__).resolve()
 
 
 @env_guard
@@ -183,6 +186,11 @@ def _train(
     assert cfg.host.parent_data is not None, 'Parent data can not be None'
     assert cfg.host.parent_results is not None, 'Output dir can not be None'
 
+    local_rank = int(os.getenv("LOCAL_RANK", "0"))
+    is_primary = local_rank == 0
+    seed = int(cfg["exp"].get("seed", 2026))
+    pl.seed_everything(seed, workers=True)
+
     train_dir = init_train_dir(cfg)
 
     pl_logger = MLFlowLogger(
@@ -196,10 +204,11 @@ def _train(
             },
         save_dir=os.getenv("MLFLOW_TRACKING_URI", "./mlruns"),
     )
-    pl_logger.log_hyperparams(flatten_mapping(
-        {"model": OmegaConf.to_container(cfg["model_cfg"], resolve=True)}))
-    pl_logger.log_hyperparams(flatten_mapping(
-        {"trainer": OmegaConf.to_container(cfg["trainer_cfg"], resolve=True)}))
+    if is_primary:
+        pl_logger.log_hyperparams(flatten_mapping(
+            {"model": OmegaConf.to_container(cfg["model_cfg"], resolve=True)}))
+        pl_logger.log_hyperparams(flatten_mapping(
+            {"trainer": OmegaConf.to_container(cfg["trainer_cfg"], resolve=True)}))
 
     logger.remove()
     logger.add(
@@ -208,7 +217,7 @@ def _train(
         level="INFO",
         colorize=True,
         )
-    log_file = Path(os.getcwd()) / "train.log"
+    log_file = Path(os.getcwd()) / ("train.log" if is_primary else f"train.rank{local_rank}.log")
     logger.add(log_file, level="INFO")
     logger.info(f"Log file at {log_file}")
 
@@ -216,20 +225,42 @@ def _train(
     meta_data["torch_version"] = str(torch.__version__)
     meta_data["date"] = str(datetime.now())
     meta_data["git"] = log_git(nndet.__path__[0], repo_name="nndet")
-    save_json(meta_data, "./meta.json")
-    try:
-        write_requirements_to_file("requirements.txt")
-    except Exception as e:
-        logger.error(f"Could not log req: {e}")
+    if is_primary:
+        save_json(meta_data, "./meta.json")
+        try:
+            write_requirements_to_file("requirements.txt")
+        except Exception as e:
+            logger.error(f"Could not log req: {e}")
 
     plan_path = Path(str(cfg.host["plan_path"]))
     plan = load_pickle(plan_path)
-    save_json(create_debug_plan(plan), "./plan_debug.json")
+    if is_primary:
+        save_json(create_debug_plan(plan), "./plan_debug.json")
 
     data_dir = Path(cfg.host["preprocessed_output_dir"]) / plan["data_identifier"] / "imagesTr"
 
+    num_gpus = int(cfg["trainer_cfg"]["gpus"])
+    accelerator = cfg["trainer_cfg"]["accelerator"]
+    augment_cfg = OmegaConf.to_container(cfg["augment_cfg"], resolve=True)
+    if accelerator == "ddp":
+        if num_gpus < 2:
+            raise ValueError("DDP requires at least two GPUs")
+        global_batch_size = int(plan["batch_size"])
+        if global_batch_size % num_gpus:
+            raise ValueError(
+                f"Planner batch size {global_batch_size} is not divisible by {num_gpus}; "
+                "refuse DDP rather than change the effective global batch size."
+            )
+        augment_cfg["batch_size"] = global_batch_size // num_gpus
+        augment_cfg["ddp_world_size"] = num_gpus
+        augment_cfg["ddp_rank"] = local_rank
+        logger.info(
+            f"DDP global batch size {global_batch_size}; local batch size "
+            f"{augment_cfg['batch_size']} on rank {local_rank}/{num_gpus}"
+        )
+
     datamodule = Datamodule(
-            augment_cfg=OmegaConf.to_container(cfg["augment_cfg"], resolve=True),
+            augment_cfg=augment_cfg,
             plan=plan,
             data_dir=data_dir,
             fold=cfg["exp"]["fold"],
@@ -252,24 +283,34 @@ def _train(
     callbacks.append(checkpoint_cb)
     callbacks.append(LearningRateMonitor(logging_interval="epoch"))
 
-    OmegaConf.save(cfg, str(Path(os.getcwd()) / "config.yaml"))
-    OmegaConf.save(cfg, str(Path(os.getcwd()) / "config_resolved.yaml"), resolve=True)
-    save_pickle(plan, train_dir / "plan.pkl") # backup plan
+    if is_primary:
+        OmegaConf.save(cfg, str(Path(os.getcwd()) / "config.yaml"))
+        OmegaConf.save(cfg, str(Path(os.getcwd()) / "config_resolved.yaml"), resolve=True)
+        save_pickle(plan, train_dir / "plan.pkl") # backup plan
     splits = load_pickle(Path(cfg.host.preprocessed_output_dir) / datamodule.splits_file)
-    save_pickle(splits, train_dir / "splits.pkl")
+    if is_primary:
+        save_pickle(splits, train_dir / "splits.pkl")
 
     trainer_kwargs = {}
     if cfg["train"]["mode"].lower() == "resume":
         trainer_kwargs["resume_from_checkpoint"] = train_dir / "model_last.ckpt"
 
-    num_gpus = cfg["trainer_cfg"]["gpus"]
     logger.info(f"Using {num_gpus} GPUs for training")
     plugins = cfg["trainer_cfg"].get("plugins", None)
+    if accelerator == "ddp":
+        if plugins is not None:
+            raise ValueError("DDP plugin is controlled by train.py; remove trainer_cfg.plugins")
+        plugins = DDPPlugin(find_unused_parameters=True)
+        # Lightning respawns this script after ``init_train_dir`` has changed
+        # the working directory to the model output folder.  Keep the entry
+        # point absolute so child ranks do not look for ``scripts/train.py``
+        # below that output folder.
+        sys.argv[0] = str(SCRIPT_PATH)
     logger.info(f"Using {plugins} plugins for training")
 
     trainer = pl.Trainer(
         gpus=list(range(num_gpus)) if num_gpus > 1 else num_gpus,
-        accelerator=cfg["trainer_cfg"]["accelerator"],
+        accelerator=accelerator,
         precision=cfg["trainer_cfg"]["precision"],
         amp_backend=cfg["trainer_cfg"]["amp_backend"],
         amp_level=cfg["trainer_cfg"]["amp_level"],
@@ -289,7 +330,7 @@ def _train(
     )
     trainer.fit(module, datamodule=datamodule)
 
-    if do_sweep:
+    if do_sweep and trainer.is_global_zero:
         case_ids = splits[cfg["exp"]["fold"]]["val"]
         if "debug" in cfg and "num_cases_val" in cfg["debug"]:
             case_ids = case_ids[:cfg["debug"]["num_cases_val"]]

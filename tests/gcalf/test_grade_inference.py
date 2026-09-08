@@ -1,44 +1,33 @@
 import torch
 
-from nndet.core.retina import BaseRetinaNet
-from nndet.inference.ensembler.detection import BoxEnsembler
+from nndet.arch.heads.comb import DetectionHead
 
 
-def _postprocessor():
-    model = BaseRetinaNet.__new__(BaseRetinaNet)
-    model.num_foreground_classes = 1
-    model.topk_candidates = 10
-    model.score_thresh = 0.0
-    model.remove_small_boxes = None
-    model.detections_per_img = 10
-    model.nms_thresh = 0.1
-    return model
+class _Coder:
+    def decode(self, box_deltas, anchors):
+        return box_deltas + 1
 
 
-def test_detection_postprocessing_keeps_grade_probabilities_with_the_selected_anchor():
-    model = _postprocessor()
-    boxes = torch.tensor([[0., 0., 2., 2.], [4., 4., 6., 6.]])
-    probs = torch.tensor([[0.2], [0.9]])
-    grade_probs = torch.tensor([[0.7, 0.1, 0.1, 0.1], [0.1, 0.1, 0.2, 0.6]])
-
-    out_boxes, out_probs, out_labels, out_grades = model.postprocess_detections_single_image(
-        boxes, probs, (8, 8), grade_probs=grade_probs)
-
-    assert torch.equal(out_boxes, boxes.flip(0))
-    assert torch.equal(out_probs, torch.tensor([0.9, 0.2]))
-    assert out_labels.tolist() == [0, 0]
-    assert torch.equal(out_grades, grade_probs.flip(0))
+class _Classifier:
+    def box_logits_to_probs(self, box_logits):
+        return box_logits.sigmoid()
 
 
-def test_ensembler_grade_matching_uses_highest_iou_then_detection_score():
-    candidate_boxes = torch.tensor([[0., 0., 2., 2.], [4., 4., 6., 6.]])
-    candidate_scores = torch.tensor([0.2, 0.9])
-    candidate_labels = torch.tensor([0, 0])
-    candidate_grades = torch.tensor([[0.7, 0.1, 0.1, 0.1], [0.1, 0.1, 0.2, 0.6]])
+class _HeadHarness:
+    coder = _Coder()
+    classifier = _Classifier()
 
-    grades = BoxEnsembler._match_grade_probs(
-        torch.tensor([[4., 4., 6., 6.]]), torch.tensor([0.9]), torch.tensor([0]),
-        candidate_boxes, candidate_scores, candidate_labels, candidate_grades,
+
+def test_detection_postprocessing_preserves_anchor_grade_logits():
+    prediction = {
+        "box_deltas": torch.tensor([[1.0, 2.0]]),
+        "box_logits": torch.tensor([[0.0]]),
+        "grade_logits": torch.tensor([[0.1, 0.2, 0.3, 0.4]]),
+    }
+
+    result = DetectionHead.postprocess_for_inference(
+        _HeadHarness(), prediction, anchors=[torch.zeros((1, 2))]
     )
 
-    assert torch.equal(grades, candidate_grades[1:])
+    assert torch.equal(result["grade_logits"], prediction["grade_logits"])
+    assert result["pred_probs"].shape == (1, 1)

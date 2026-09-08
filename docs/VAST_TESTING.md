@@ -1,4 +1,4 @@
-# Single-instance Vast.ai validation (M0--M3)
+# Four-GPU Vast.ai validation (M0--M6)
 
 This run uses one verified, on-demand Vast.ai instance only. It validates research software and
 is not a clinical workflow. Do not commit PI-CAI images, prepared arrays, checkpoints, credentials,
@@ -6,8 +6,8 @@ or exports.
 
 ## Prerequisites and cost controls
 
-Use one RTX 3090, RTX A5000, RTX A6000, or A100 with at least 24 GB VRAM, 8 CPU cores, 32 GB RAM,
-500 GB local disk, direct SSH, and reliability at least 0.99. Do not select RTX 4090/Ada: the
+Use four RTX 3090, RTX A5000, RTX A6000, or A100 GPUs with at least 24 GB VRAM each, 32 CPU cores,
+128 GB RAM, 500 GB local disk, direct SSH, and reliability at least 0.99. Do not select RTX 4090/Ada: the
 pinned CUDA 11.3 extension build targets compute capabilities through 8.6. The required image is
 `pytorch/pytorch:1.10.0-cuda11.3-cudnn8-devel`.
 
@@ -18,11 +18,22 @@ export, and verify promptly.
 
 ```bash
 vastai set api-key "$VAST_API_KEY"
-vastai create ssh-key ~/.ssh/id_ed25519.pub
+ssh-keygen -t ed25519 -a 100 -f ~/.ssh/gcalf_vast_ed25519 -C "gcalf-vast"
+vastai create ssh-key "$(tr -d '\n' < ~/.ssh/gcalf_vast_ed25519.pub)"
 cloud/vast/host.sh search
-cloud/vast/host.sh create --offer-id "$OFFER_ID" --disk-gb 500
+cloud/vast/host.sh create --offer-id "$OFFER_ID" --disk-gb 500 --label gcalf-m1-m6
 cloud/vast/host.sh status --instance-id "$INSTANCE_ID"
 vastai ssh-url "$INSTANCE_ID"
+```
+
+The pinned Kaggle CLI reads an API token file. In Kaggle account settings, create and download a
+new API token (`kaggle.json`), then copy it to the instance without committing or sharing it:
+
+```bash
+mkdir -p /root/.config/kaggle
+chmod 700 /root/.config/kaggle
+# Copy the downloaded kaggle.json into this directory by a secure method.
+chmod 600 /root/.config/kaggle/kaggle.json
 ```
 
 `cloud/vast/host.sh ... --dry-run` prints its command without changing provider state. Record the
@@ -36,12 +47,12 @@ SSH URL, then execute the following inside the requested image:
 
 ```bash
 cd /workspace/GCALF-Net
-bash cloud/vast/bootstrap.sh --repo-dir "$PWD"
+GCALF_CONDA_ENV=/workspace/.conda/gcalf bash cloud/vast/bootstrap.sh --repo-dir "$PWD"
 export det_data=/workspace/det_data
 export det_models=/workspace/det_models
 export OMP_NUM_THREADS=8
 export det_num_threads=8
-bash cloud/vast/run_milestones.sh --repo-dir "$PWD" --workspace /workspace
+GCALF_CONDA_ENV=/workspace/.conda/gcalf bash cloud/vast/run_milestones.sh --repo-dir "$PWD" --workspace /workspace
 ```
 
 `bootstrap.sh` installs the pinned M0 dependencies, forces the CUDA extension build, and records
@@ -53,18 +64,64 @@ M0 runs `tests/test_imports.py`, `tests/test_encoder_cpu.py`, and `tests/test_cs
 skipped CUDA test is a failure. It also confirms that `nndet` resolves to this checkout and imports
 `picai_prep`, `picai_eval`, and `medcam`.
 
-The M1 download helper retrieves exactly the five archives from the original Zenodo record 6517398,
-resumes incomplete `curl` downloads, verifies the record's published MD5 checksums before extraction,
-and records the actual `picai_labels` and `picai_baseline` Git SHAs in
-`/workspace/source/SOURCE_REVISIONS.txt`. It clones and uses only the original granular expert
-labels, `marksheet.csv`, and `picai_nnunet/splits.json`; it does not use binary Pooch25 masks.
+The M1 download helper retrieves the pinned operational mirror
+`varshithpsingh/prostate-cancer-pi-cai-dataset/3` from Kaggle. The PI-CAI project remains the
+scientific source; this Kaggle dataset is the reproducible transfer source. The helper records the
+downloaded archive SHA-256 and the pinned `picai_labels` and `picai_baseline` Git SHAs in
+`/workspace/source/SOURCE_REVISIONS.txt`. It uses the all-case official `picai/splits.json` fold
+definition, granular expert labels, `marksheet.csv`, and binary Pooch25 masks as detection-only
+positives; Pooch25 lesions never supervise the grade head.
 
-M1 writes `/workspace/det_data/Task2201_PICAI_GGG`, installs official splits, and checks geometry,
+M1 writes `/workspace/det_data/Task2201_PICAI_csPCa`, installs official splits, and checks geometry,
 modalities, labels, instances, folds, patient separation, plus the three-input/four-foreground plan.
 M2 preserves its initial/final loss, duration, loss components, and peak GPU memory in
 `evidence/m2/overfit.log`. M3 creates a new `Task900_PICAI_TINY` by default. If it fails, retain the
 partial task and model output for diagnosis; retry with `--m3-task Task901_PICAI_TINY` (or another
 unused `Task9xx_PICAI_TINY` identifier). No script deletes a partial task.
+
+## Four-GPU training gate and run map
+
+Fold 0 may use all four GPUs only after a recorded DDP gate: compare one fixed FP32 batch against
+the single-GPU result (maximum absolute difference <= `1e-5`), then measure 50 warm-up and 200 timed
+steps. Require at least `2.5x` throughput and at least 10% free VRAM on every GPU. Store commands,
+GPU telemetry, the batch hash, and results under `/workspace/evidence/ddp/`. A failing gate means
+all official folds run on one GPU; it is not a license to change the global batch or learning rate.
+
+Use `scripts/run_ddp_gate.py` for this admission gate. It generates a deterministic, non-patient
+one-class/grade-masked FP32 batch at the task's planned shape, records only its SHA-256 hash and scalar
+loss (not an image array), and times the actual forward/backward/SGD/DDP-all-reduce path. Run the
+single-GPU command first, then the four-rank command. Capture `nvidia-smi` before and after each run in
+the same evidence directory.
+
+```bash
+EVIDENCE=/workspace/evidence/ddp/YYYYMMDD
+mkdir -p "$EVIDENCE"
+nvidia-smi > "$EVIDENCE/nvidia-smi-before.txt"
+CUDA_VISIBLE_DEVICES=0 python scripts/run_ddp_gate.py Task2201_PICAI_csPCa \
+  --mode single --evidence "$EVIDENCE" |& tee "$EVIDENCE/single.log"
+python -m torch.distributed.run --nproc_per_node=4 scripts/run_ddp_gate.py \
+  Task2201_PICAI_csPCa --mode ddp --evidence "$EVIDENCE" |& tee "$EVIDENCE/ddp.log"
+nvidia-smi > "$EVIDENCE/nvidia-smi-after.txt"
+```
+
+`gate.json` is the recorded decision. Only its all-pass result permits the Fold 0 DDP command below.
+
+The DDP configuration keeps the planner's global batch fixed, splits it evenly across the four
+ranks, assigns each rank disjoint train/validation cases and augmenter seeds, gathers evaluator
+caches before nonlinear FROC/Dice calculation, and enables unused-parameter detection for the
+masked grade head. It refuses a plan whose batch is not divisible by four.
+
+```bash
+# Only after the DDP gate passes; replace the task/config with the registered arm.
+python scripts/train.py Task2201_PICAI_csPCa \
+  -o train=gcalf_ddp exp.fold=0 exp.seed=2026
+
+# Folds 1--4 remain independent one-GPU runs (one process per GPU).
+CUDA_VISIBLE_DEVICES=0 python scripts/train.py Task2201_PICAI_csPCa \
+  -o train=gcalf_baseline exp.fold=1 exp.seed=2026
+```
+
+Freeze this DDP/single-GPU decision and the fold-to-GPU map before beginning official results.
 
 ## Export, local verification, and recovery
 
@@ -73,7 +130,7 @@ model tree (checkpoints, plan, predictions, and metrics):
 
 ```bash
 bash cloud/vast/export_results.sh \
-  --task-dir /workspace/det_data/Task2201_PICAI_GGG \
+  --task-dir /workspace/det_data/Task2201_PICAI_csPCa \
   --evidence-dir /workspace/evidence \
   --model-dir /workspace/det_models/Task900_PICAI_TINY/RetinaUNetV001_D3V001_3d \
   --export-dir /workspace/export

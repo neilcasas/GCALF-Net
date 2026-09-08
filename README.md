@@ -68,7 +68,7 @@ python -m gcalf_data.prepare_picai build \
   --task-dir "$det_data/Task2201_PICAI_csPCa" \
   --work-dir /path/to/picai_m1_work
 
-nndet_prep Task2201_PICAI_csPCa
+nndet_prep Task2201_PICAI_csPCa -o train=gcalf_baseline
 
 python -m gcalf_data.prepare_picai install-splits \
   --task-dir "$det_data/Task2201_PICAI_csPCa" \

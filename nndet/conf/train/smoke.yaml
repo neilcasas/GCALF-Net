@@ -33,8 +33,15 @@ trainer_cfg:
   deterministic: False
   benchmark: False
 
-  monitor_key: "mAP_IoU_0.10_0.50_0.05_MaxDet_100" # used to determine the best model
-  monitor_mode: "max" # metric operation mode "min" or "max"
+  # Tiny M3 cases derive IoU thresholds from their own geometry, so the full
+  # cohort's fixed mAP metric name is not present.  Validation loss is logged
+  # for every smoke task and is sufficient for its checkpoint-existence gate.
+  monitor_key: "val_loss"
+  monitor_mode: "min"
+  # BoxSweeper uses fast IoU evaluation, independently of the full
+  # validation centroid evaluator. This key is present even on M3's tiny
+  # positive-plus-benign validation holdout.
+  sweep_metric: "mAP_IoU_0.10_0.50_0.05_MaxDet_100"
 
   max_num_epochs: 2 # max number of epochs
   num_train_batches_per_epoch: 20 # number of train batches per epoch

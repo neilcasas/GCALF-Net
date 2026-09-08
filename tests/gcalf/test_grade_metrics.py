@@ -4,9 +4,9 @@ from gcalf_eval.grade_metrics import match_grade_predictions, summarize_grade_ma
 
 
 def test_grade_matching_uses_detection_score_then_iou_and_reports_misses_and_false_positives():
-    gt_boxes = np.array([[0, 2, 0, 2, 0, 2], [4, 6, 4, 6, 4, 6]], dtype=np.float32)
+    gt_boxes = np.array([[0, 0, 2, 2, 0, 2], [4, 4, 6, 6, 4, 6]], dtype=np.float32)
     gt_grades = np.array([2, 5])
-    pred_boxes = np.array([[4, 6, 4, 6, 4, 6], [0, 2, 0, 2, 0, 2], [8, 9, 8, 9, 8, 9]], dtype=np.float32)
+    pred_boxes = np.array([[4, 4, 6, 6, 4, 6], [0, 0, 2, 2, 0, 2], [8, 8, 9, 9, 8, 9]], dtype=np.float32)
     pred_scores = np.array([0.9, 0.8, 0.7], dtype=np.float32)
     pred_probs = np.array([[0.1, 0.1, 0.1, 0.7], [0.8, 0.1, 0.05, 0.05], [0.25] * 4], dtype=np.float32)
 
@@ -27,3 +27,22 @@ def test_grade_summary_has_four_by_four_confusion_and_weighted_f1():
     assert summary["grade_missed_supervised"] == 1
     assert summary["grade_false_positives"] == 2
     assert 0.0 <= summary["grade_weighted_f1"] <= 1.0
+
+
+def test_matching_uses_nndetection_box_order_and_does_not_penalize_ungraded_true_positives():
+    gt_boxes = np.array([[1, 2, 5, 6, 3, 7], [10, 11, 12, 13, 14, 15]], dtype=np.float32)
+    gt_grades = np.array([2, -1], dtype=np.int64)
+    supervised = np.array([True, False])
+    pred_boxes = gt_boxes.copy()
+    pred_scores = np.array([0.9, 0.8], dtype=np.float32)
+    pred_probs = np.array([[0.9, 0.05, 0.03, 0.02], [0.25] * 4], dtype=np.float32)
+
+    truth, predicted, misses, false_positives, matched_ungraded = match_grade_predictions(
+        pred_boxes, pred_scores, pred_probs, gt_boxes, gt_grades, supervised, return_details=True
+    )
+
+    assert truth == [2]
+    assert predicted == [2]
+    assert misses == 0
+    assert false_positives == 0
+    assert matched_ungraded == 1

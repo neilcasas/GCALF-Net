@@ -378,7 +378,7 @@ class WindowedCrossAttentionFusion3D(nn.Module):
         self.swin_queries_cnn = nn.MultiheadAttention(out_channels, num_heads, dropout=dropout, batch_first=True)
         self.norm = nn.LayerNorm(out_channels)
         self.out_proj = nn.Sequential(
-            nn.Conv3d(out_channels * 2, out_channels, 1, bias=False),
+            nn.Conv3d(out_channels, out_channels, 1, bias=False),
             nn.InstanceNorm3d(out_channels), nn.ReLU(inplace=True),
         )
 
@@ -391,12 +391,13 @@ class WindowedCrossAttentionFusion3D(nn.Module):
         swin_cross, _ = self.swin_queries_cnn(swin_w, cnn_w, cnn_w, key_padding_mask=pad_mask, need_weights=False)
         fused_w = self.norm(cnn_cross + swin_cross)          # attention terms only
         fused = window_reverse_3d(fused_w, meta)
-        return self.out_proj(torch.cat([cnn, fused], dim=1)) + cnn   # residual counted ONCE
+        return self.out_proj(fused) + cnn   # residual counted ONCE
 ```
 
 **Two rules that must hold, both non-obvious and both caught only by the tests below:**
-- **The aligned CNN feature reaches the output through exactly one path** (the concat + trailing
-  `+ cnn`). Also adding it inside the attention sum triples it.
+- **The aligned CNN feature reaches the output through exactly one path** (the trailing `+ cnn`).
+  Adding it inside the attention sum or concatenating it before the output projection introduces
+  another path.
 - **Padding is masked, not attended as real keys.** `window_size=(2,7,7)` rarely divides stage
   feature maps evenly; unmasked zero-padding lets the model learn an input-size-dependent bias.
   Both `MultiheadAttention` calls take `key_padding_mask`; a window that is entirely padding

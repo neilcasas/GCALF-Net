@@ -106,3 +106,17 @@ def test_build_tiny_task_rejects_missing_grade_and_existing_target(tmp_path):
     (target / "stale").write_text("stale")
     with pytest.raises(FileExistsError, match="existing task"):
         build_tiny_task(source, target)
+
+
+def test_build_tiny_task_requires_a_grade_unsupervised_positive(tmp_path):
+    source = tmp_path / "Task2201_PICAI_csPCa"
+    _write_source_task(source)
+    ungraded = source / "raw_splitted" / "labelsTr" / "10006_1000006.json"
+    ungraded.write_text(json.dumps({
+        "instances": {"1": 0},
+        "grades": {"1": 2},
+        "grade_sources": {"1": "human_expert_mask"},
+        "grade_supervised": {"1": True},
+    }))
+    with pytest.raises(ValueError, match="grade-unsupervised positive"):
+        build_tiny_task(source, tmp_path / "Task902_PICAI_TINY")

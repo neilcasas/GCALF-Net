@@ -1,7 +1,5 @@
 """Focused command-line tests for the single-instance Vast.ai workflow helpers."""
 
-import hashlib
-import os
 import subprocess
 import tarfile
 from pathlib import Path
@@ -32,41 +30,27 @@ def test_host_create_dry_run_does_not_require_or_execute_vastai():
     assert result.returncode == 0
     assert "vastai create instance 123" in result.stdout
     assert "pytorch/pytorch:1.10.0-cuda11.3-cudnn8-devel" in result.stdout
+    assert "--label gcalf-m1-m6" in result.stdout
 
 
-def test_download_manifest_verification_detects_checksum_failure(tmp_path):
-    archive_dir = tmp_path / "source" / "archives"
-    archive_dir.mkdir(parents=True)
-    archive = archive_dir / "picai_public_images_fold0.zip"
-    archive.write_bytes(b"not the expected archive")
-    manifest = tmp_path / "manifest.tsv"
-    expected = hashlib.md5(b"different bytes").hexdigest()
-    manifest.write_text(
-        "picai_public_images_fold0.zip\t%s\thttps://zenodo.org/records/6517398/files/fold0.zip\n" % expected
-        + "\n".join(
-            "picai_public_images_fold%d.zip\t%s\thttps://zenodo.org/records/6517398/files/fold%d.zip" % (i, "0" * 32, i)
-            for i in range(1, 5)
-        )
-        + "\n"
-    )
+def test_download_uses_the_pinned_kaggle_source_in_dry_run(tmp_path):
+    result = run_script(DOWNLOAD, "--source-dir", str(tmp_path / "source"), "--dry-run")
+    assert result.returncode == 0, result.stderr
+    assert "varshithpsingh/prostate-cancer-pi-cai-dataset/3" in result.stdout
+    assert "kaggle datasets download" in result.stdout
+
+
+def test_download_rejects_an_unpinned_kaggle_source(tmp_path):
     result = run_script(
         DOWNLOAD,
         "--source-dir",
         str(tmp_path / "source"),
-        "--manifest",
-        str(manifest),
-        "--verify-only",
+        "--dataset-ref",
+        "varshithpsingh/prostate-cancer-pi-cai-dataset",
+        "--dry-run",
     )
     assert result.returncode == 2
-    assert "checksum mismatch" in result.stderr
-
-
-def test_download_manifest_rejects_non_picai_rows(tmp_path):
-    manifest = tmp_path / "manifest.tsv"
-    manifest.write_text("wrong.zip\t%s\thttps://zenodo.org/records/6517398/files/wrong.zip\n" % ("0" * 32))
-    result = run_script(DOWNLOAD, "--source-dir", str(tmp_path / "source"), "--manifest", str(manifest), "--dry-run")
-    assert result.returncode == 2
-    assert "unexpected archive" in result.stderr
+    assert "pinned" in result.stderr
 
 
 def test_export_refuses_existing_output_and_archives_required_contents(tmp_path):

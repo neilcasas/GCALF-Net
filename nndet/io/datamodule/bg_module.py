@@ -108,6 +108,14 @@ class Datamodule(BaseModule):
         self.augmentation: Optional[Type[AugmentationSetup]] = None
         self.patch_size_generator: Optional[Sequence[int]] = None
 
+    def _augmenter_seeds(self, stream: int) -> List[int]:
+        """Return reproducible, non-overlapping worker seeds for this DDP rank."""
+        num_processes = max(1, min(int(self.augment_cfg.get('num_threads', 12)), 16) - 1)
+        base_seed = int(self.augment_cfg.get("seed", 2026))
+        rank = int(self.augment_cfg.get("ddp_rank", 0))
+        return [base_seed + rank * 100_000 + stream * 1_000 + worker
+                for worker in range(num_processes)]
+
     @property
     def patch_size(self):
         """
@@ -221,7 +229,7 @@ class Datamodule(BaseModule):
             num_processes=min(int(self.augment_cfg.get('num_threads', 12)), 16) - 1,
             num_cached_per_queue=self.augment_cfg.get('num_cached_per_thread', 2),
             multiprocessing=self.augment_cfg.get("multiprocessing", True),
-            seeds=None,
+            seeds=self._augmenter_seeds(stream=0),
             pin_memory=True,
             )
         logger.info("TRAINING KEYS:\n %s" % (str(self.dataset_tr.keys())))
@@ -256,7 +264,7 @@ class Datamodule(BaseModule):
             num_processes=min(int(self.augment_cfg.get('num_threads', 12)), 16) - 1,
             num_cached_per_queue=self.augment_cfg.get('num_cached_per_thread', 2),
             multiprocessing=self.augment_cfg.get("multiprocessing", True),
-            seeds=None,
+            seeds=self._augmenter_seeds(stream=1),
             pin_memory=True,
             )
         logger.info("VALIDATION KEYS:\n %s" % (str(self.dataset_val.keys())))

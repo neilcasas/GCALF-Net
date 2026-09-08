@@ -179,6 +179,7 @@ def build_task(
         crop_retention_records.append(retention_record)
 
         excluded = retention_record["status"] == "excluded_no_retained_voxels"
+        note = ""
         if excluded:
             note = " [excluded: gland-centred crop retained no lesion voxels]"
         else:
@@ -315,10 +316,12 @@ def select_tiny_cases(source_task_dir: Path) -> Dict[str, List[str]]:
         )
         representatives.append(_select_case(candidates, used_patients, f"GGG{grade}"))
 
-    remaining_positive = sorted(
-        case_id for case_id in case_ids if positive_by_case[case_id] and case_id not in representatives
+    ungraded_positive = sorted(
+        case_id
+        for case_id in case_ids
+        if positive_by_case[case_id] and not grades_by_case[case_id] and case_id not in representatives
     )
-    additional_positive = _select_case(remaining_positive, used_patients, "additional positive")
+    additional_positive = _select_case(ungraded_positive, used_patients, "grade-unsupervised positive")
     benign_candidates = sorted(case_id for case_id in case_ids if not positive_by_case[case_id])
     benign = _select_case(benign_candidates, used_patients, "benign")
 

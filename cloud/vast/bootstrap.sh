@@ -30,6 +30,13 @@ done
 
 [[ -f "$repo_dir/environment.yml" && -f "$repo_dir/requirements-tools.txt" ]] || die "--repo-dir is not this checkout: $repo_dir"
 
+if [[ -n "${GCALF_CONDA_ENV:-}" ]]; then
+    [[ -f /opt/conda/etc/profile.d/conda.sh ]] || die "Conda activation script is unavailable"
+    # shellcheck disable=SC1091
+    source /opt/conda/etc/profile.d/conda.sh
+    conda activate "$GCALF_CONDA_ENV"
+fi
+
 run() {
     if [[ "$dry_run" == true ]]; then
         printf 'dry-run:'
@@ -51,7 +58,12 @@ fi
 
 mkdir -p "$evidence_dir"
 {
-    printf 'repository_sha='; git -C "$repo_dir" rev-parse HEAD
+    printf 'repository_sha='
+    if git -C "$repo_dir" rev-parse HEAD >/dev/null 2>&1; then
+        git -C "$repo_dir" rev-parse HEAD
+    else
+        printf 'unavailable (uploaded worktree without .git metadata)\n'
+    fi
     printf 'base_image=%s\n' "$image_ref"
     printf 'hostname='; hostname
     printf 'python='; python --version
@@ -63,6 +75,8 @@ mkdir -p "$evidence_dir"
 python -m pip install --upgrade pip
 python -m pip install --extra-index-url https://download.pytorch.org/whl/cu113 \
     torch==1.10.1+cu113 torchvision==0.11.2+cu113 torchaudio==0.10.1+cu113
+torch_lib=$(python -c 'import os, torch; print(os.path.join(os.path.dirname(torch.__file__), "lib"))')
+export LD_LIBRARY_PATH="$torch_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 python -m pip install -r "$repo_dir/requirements.txt" -r "$repo_dir/requirements-tools.txt"
 FORCE_CUDA=1 python -m pip install -v -e "$repo_dir"
 python -m pip freeze | sort > "$evidence_dir/pip-freeze.txt"
