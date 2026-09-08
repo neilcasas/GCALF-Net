@@ -57,6 +57,17 @@ The decisions above stand. These five corrections come from reading the released
 
 Also recorded: the working repository is now `GCALF-Net/`, a copy of `PDHD-Net/` at tag `pdhd-upstream` with the upstream remote removed. `PDHD-Net/` stays pristine as the released reference, and only one of the two may be installed at a time since both provide the `nndet` package.
 
+## Amendments — rev. 3 (2026-09-08)
+
+These three corrections come from implementing LFF (M6) and prototyping the spec's own reference
+code in the pinned `gcalf:m0` image; they change how decision 2 is implemented, not whether.
+
+| # | Correction | Evidence |
+|---|---|---|
+| A6 | `spherical_mask_rfft` now exists (`nndet/arch/encoder/gcalf/frequency_mask.py`) and takes the **spatial** shape `(D, H, W)`, not the half-spectrum shape `rfftn` produces. Both `ARCHITECTURE.md` §6 and `PHASE_3_lff.md` §3.1's reference code called it with `spectrum.shape[-3:]`, which crashes: `W//2+1` does not determine `W`, so the resulting mask shape mismatches the spectrum on the trailing axis. Both documents' reference code blocks are corrected in place. | `RuntimeError: The size of tensor a (17) must match the size of tensor b (33)` reproduced with the as-written call at shape `(16,64,33)` vs `(16,64,17)`; fixed by passing `x.shape[-3:]` |
+| A7 | With the corrected call, LFF at `delta_weight=0` matches FDSF's output at `atol=1e-5` with roughly 10x margin at every measured shape, odd and even alike (max abs diff 3.7e-08 to 1.4e-06 across shapes from `(4,8,8)` to `(32,256,256)`). The `atol=1e-5` gate in `test_lff.py` is honest, not loosened for convenience. | Measured directly in `gcalf:m0` (torch 1.10.1) before writing `tests/gcalf/test_lff.py` |
+| A8 | The spec default `grid_size=(4,8,8)` is even on all three axes; with `align_corners=True`, no grid sample lands exactly on DC (samples land at centered indices 0,5,10,15 for a size-16 axis; DC sits at index 8). PHASE_3 §3.1's caveat about "within half a bin" holds only for **odd** grid dims. This is not fatal — DC still receives a well-defined interpolated blend (an all-ones grid gives `gain@DC == 1.0` exactly) — but no single learned parameter controls DC directly. Recorded here rather than changed; the deferred V-gate's required radial-response visualization is the actual gate on whether this weakens the learned low-pass response in practice. | Grid-sample index arithmetic for `align_corners=True`, `grid_size=4`, output size 16 |
+
 ## Review Triggers
 
 Revisit this ADR only if the released encoder cannot train end-to-end, the pinned runtime cannot run on available GPU infrastructure, or measured windowed WAF/CAF cannot fit at the five-level contract's shared fusion locations. Any revision must update the method claim, configs, experiment matrix, and all affected documentation together.

@@ -32,6 +32,8 @@ METRIC_FIELDS = (
     "grade_matched_ungraded_lesions",
     "grade_missed_supervised",
     "grade_false_positives",
+    "grade_false_positives_per_case",
+    "grade_score_threshold",
     "grade_weighted_f1",
 )
 
@@ -118,6 +120,7 @@ def run_evaluation(
     model: str,
     fold: int,
     split: str,
+    grade_score_threshold: float = 0.0,
 ) -> Dict[str, object]:
     """Evaluate exactly the requested cases and persist the M3 metric artifacts."""
     prediction_dir = Path(prediction_dir)
@@ -157,7 +160,8 @@ def run_evaluation(
             gt_boxes, gt_grades, gt_supervised = lesion_instances(ground_truth_dir / f"{case_id}.nii.gz")
             truth, predicted, misses, false_positives, matched_ungraded = match_grade_predictions(
                 prediction["pred_boxes"], prediction["pred_scores"], prediction["pred_grade_probs"],
-                gt_boxes, gt_grades, gt_supervised, return_details=True)
+                gt_boxes, gt_grades, gt_supervised, score_threshold=grade_score_threshold,
+                return_details=True)
             grade_true.extend(truth)
             grade_predicted.extend(predicted)
             grade_misses += misses
@@ -189,7 +193,8 @@ def run_evaluation(
     }
     if has_grade_predictions:
         row.update(summarize_grade_matches(
-            grade_true, grade_predicted, grade_misses, grade_false_positives, grade_matched_ungraded
+            grade_true, grade_predicted, grade_misses, grade_false_positives, grade_matched_ungraded,
+            num_cases=len(expected_case_ids), score_threshold=grade_score_threshold,
         ))
     if not all(math.isfinite(float(row[field])) for field in ("picai_score", "auroc", "lesion_ap")):
         raise ValueError(f"PI-CAI metrics are not finite: {row}")
@@ -235,6 +240,10 @@ def main() -> None:
     parser.add_argument("--fold", type=int, default=0)
     parser.add_argument("--split", choices=("test", "val"), default="test")
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument(
+        "--grade-score-threshold", type=float, default=0.0,
+        help="Drop grade-matching predictions scoring below this before matching (default: 0.0, i.e. no threshold).",
+    )
     args = parser.parse_args()
 
     prediction_dir, ground_truth_dir, case_ids, default_output_dir, task_name = _resolve_paths(
@@ -252,6 +261,7 @@ def main() -> None:
         model=args.model,
         fold=args.fold,
         split=args.split,
+        grade_score_threshold=args.grade_score_threshold,
     )
     print(row)
 

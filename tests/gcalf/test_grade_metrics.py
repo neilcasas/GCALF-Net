@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from gcalf_eval.grade_metrics import match_grade_predictions, summarize_grade_matches
 
@@ -27,6 +28,51 @@ def test_grade_summary_has_four_by_four_confusion_and_weighted_f1():
     assert summary["grade_missed_supervised"] == 1
     assert summary["grade_false_positives"] == 2
     assert 0.0 <= summary["grade_weighted_f1"] <= 1.0
+    assert summary["grade_score_threshold"] == 0.0
+    assert "grade_false_positives_per_case" not in summary
+
+
+def test_grade_summary_reports_a_per_case_rate_and_the_threshold_it_was_computed_at():
+    summary = summarize_grade_matches([2, 3], [2, 3], misses=0, false_positives=4,
+                                      num_cases=2, score_threshold=0.3)
+
+    assert summary["grade_false_positives_per_case"] == pytest.approx(2.0)
+    assert summary["grade_score_threshold"] == pytest.approx(0.3)
+
+
+def test_several_boxes_on_the_same_lesion_count_as_one_match_and_the_rest_as_false_positives():
+    gt_boxes = np.array([[0, 0, 2, 2, 0, 2]], dtype=np.float32)
+    gt_grades = np.array([3])
+    pred_boxes = np.tile(gt_boxes, (3, 1))
+    pred_scores = np.array([0.9, 0.8, 0.7], dtype=np.float32)
+    pred_probs = np.array([[0.0, 1.0, 0.0, 0.0]] * 3, dtype=np.float32)
+
+    truth, predicted, misses, false_positives = match_grade_predictions(
+        pred_boxes, pred_scores, pred_probs, gt_boxes, gt_grades)
+
+    assert truth == [3]
+    assert predicted == [3]
+    assert misses == 0
+    assert false_positives == 2
+
+
+def test_score_threshold_drops_low_scoring_predictions_before_matching():
+    gt_boxes = np.array([[0, 0, 2, 2, 0, 2]], dtype=np.float32)
+    gt_grades = np.array([3])
+    pred_boxes = np.tile(gt_boxes, (2, 1))
+    pred_scores = np.array([0.9, 0.1], dtype=np.float32)
+    pred_probs = np.array([[0.0, 1.0, 0.0, 0.0], [0.25] * 4], dtype=np.float32)
+
+    truth, predicted, misses, false_positives = match_grade_predictions(
+        pred_boxes, pred_scores, pred_probs, gt_boxes, gt_grades)
+    assert false_positives == 1  # default threshold (0.0): both predictions are matched against
+
+    truth, predicted, misses, false_positives = match_grade_predictions(
+        pred_boxes, pred_scores, pred_probs, gt_boxes, gt_grades, score_threshold=0.5)
+    assert truth == [3]
+    assert predicted == [3]
+    assert misses == 0
+    assert false_positives == 0  # the 0.1-scoring duplicate is dropped before matching
 
 
 def test_matching_uses_nndetection_box_order_and_does_not_penalize_ungraded_true_positives():

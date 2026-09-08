@@ -99,3 +99,45 @@ with open(sys.argv[2], newline="") as file:
 assert len(rows) == 1, rows
 assert all(math.isfinite(float(rows[0][field])) for field in ("picai_score", "auroc", "lesion_ap")), rows
 ' "$training_dir" "$metrics_path"
+
+labels_dir="$tiny_task_dir/raw_splitted/labelsTs"
+predictions_dir="$training_dir/test_predictions"
+grade_metrics_path="$training_dir/test_results/picai/grade_metrics.json"
+python -c '
+import json
+import math
+import pickle
+import sys
+from pathlib import Path
+
+import numpy as np
+
+from gcalf_eval.grade_metrics import lesion_instances
+
+grade_metrics_path, labels_dir, predictions_dir = (Path(argument) for argument in sys.argv[1:4])
+assert grade_metrics_path.is_file(), grade_metrics_path
+
+with grade_metrics_path.open() as file:
+    grade_metrics = json.load(file)
+
+grade_fields = ("grade_matched_detections", "grade_matched_ungraded_lesions", "grade_missed_supervised",
+                "grade_false_positives", "grade_false_positives_per_case", "grade_score_threshold",
+                "grade_weighted_f1")
+assert all(math.isfinite(float(grade_metrics[field])) for field in grade_fields), grade_metrics
+
+supervised_lesions = 0
+for label_path in sorted(labels_dir.glob("*.nii.gz")):
+    _, _, supervised = lesion_instances(label_path)
+    supervised_lesions += int(supervised.sum())
+assert grade_metrics["grade_matched_detections"] + grade_metrics["grade_missed_supervised"] == supervised_lesions, (
+    grade_metrics, supervised_lesions
+)
+
+total_predicted_boxes = 0
+for prediction_path in sorted(predictions_dir.glob("*_boxes.pkl")):
+    with prediction_path.open("rb") as file:
+        total_predicted_boxes += len(np.asarray(pickle.load(file)["pred_boxes"]).reshape(-1, 6))
+assert grade_metrics["grade_false_positives"] <= total_predicted_boxes, (
+    grade_metrics["grade_false_positives"], total_predicted_boxes
+)
+' "$grade_metrics_path" "$labels_dir" "$predictions_dir"
