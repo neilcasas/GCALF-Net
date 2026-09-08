@@ -513,8 +513,13 @@ class BoxEnsembler(BaseEnsembler):
         labels = cat(self.model_results[name]["labels"], dim=0)
         weights = cat(self.model_results[name]["weights"], dim=0)
         grade_probs = None
-        if self.model_results[name].get("grade_probs"):
-            grade_probs = cat(self.model_results[name]["grade_probs"], dim=0)
+        # `.get()` alone is unsafe here: `save_state()`'s top-k truncation can
+        # replace this entry with a multi-row Tensor, and `bool(tensor)` is
+        # ambiguous for more than one element. `len()` is unambiguous for
+        # both the List[Tensor] and Tensor forms.
+        grade_probs_values = self.model_results[name].get("grade_probs")
+        if grade_probs_values is not None and len(grade_probs_values) > 0:
+            grade_probs = cat(grade_probs_values, dim=0)
         return boxes, probs, labels, weights, grade_probs
 
     def process_ensemble(self, boxes: List[Tensor], probs: List[Tensor],
@@ -1138,8 +1143,11 @@ class BoxEnsemblerSelective(BoxEnsembler):
         labels = cat(self.model_results[name]["labels"]).to(self.device)
         weights = cat(self.model_results[name]["weights"]).to(self.device)
         grade_probs = None
-        if self.model_results[name].get("grade_probs"):
-            grade_probs = cat(self.model_results[name]["grade_probs"]).to(self.device)
+        # See BoxEnsembler.process_model: `.get()` alone is unsafe once
+        # `save_state()` truncation has replaced this entry with a Tensor.
+        grade_probs_values = self.model_results[name].get("grade_probs")
+        if grade_probs_values is not None and len(grade_probs_values) > 0:
+            grade_probs = cat(grade_probs_values).to(self.device)
 
         candidate_boxes, candidate_probs, candidate_labels = boxes, probs, labels
         boxes, probs, labels, weights = self.postprocess_image(
@@ -1236,8 +1244,10 @@ class BoxEnsemblerSelective(BoxEnsembler):
             labels = cat(self.model_results[model]["labels"])
             weights = cat(self.model_results[model]["weights"])
             grade_probs = None
-            if self.model_results[model].get("grade_probs"):
-                grade_probs = cat(self.model_results[model]["grade_probs"])
+            # Same unsafe-truthiness issue as BoxEnsembler.process_model.
+            grade_probs_values = self.model_results[model].get("grade_probs")
+            if grade_probs_values is not None and len(grade_probs_values) > 0:
+                grade_probs = cat(grade_probs_values)
 
             if len(probs) > self.parameters["model_topk"]:
                 _, idx_sorted = probs.sort(descending=True)
