@@ -217,9 +217,15 @@ numbers are meaningless on 6 cases.
 
 ## 2.9 M5 — budget ladder decision
 
-Turn fold 0's measured seconds/step into `projected_hours = seconds_per_step * 150_000 / 3600`
-and `projected_cost = projected_hours * 20 * hourly_rate`. Compare against the $150–350 planned
-budget (ADR 0002 D10) and select, before any other fold starts:
+Turn each fold-0 arm's measured seconds/step into `projected_gpu_hours = seconds_per_step *
+150_000 / 3600 * 20`. The budget projection is for the rented four-GPU instance running four
+independent single-GPU jobs concurrently: `projected_instance_hours = projected_gpu_hours / 4`
+and `projected_cost = projected_instance_hours * hourly_rate`. Record the slowest arm and the
+measured solo-versus-four-concurrent contention factor as the budget driver. Show the former
+serialized `projected_gpu_hours * hourly_rate` figure beside the corrected instance-hour figure.
+This cost-model correction is made before any fold-1–4 result exists, so it is not the test-set
+tuning this section prohibits. Compare against the $150–350 planned budget (ADR 0002 D10) and
+select, before any other fold starts:
 1. **Full matrix** (planned rung) — 20 runs at the shipped schedule.
 2. **Halved schedule, all 20 runs** — `num_train_batches_per_epoch: 1250` for every run, applied
    identically.

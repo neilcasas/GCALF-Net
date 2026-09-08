@@ -142,10 +142,12 @@ the ladder rung first.
 **Goal.** Turn the fold-0 pilot's measured seconds/step into a committed matrix plan, per
 `ARCHITECTURE.md §9` and ADR 0002 D10 (planned rung: full 20-run matrix, $150–350 budget).
 
-**V gate.** Record, before any other fold starts: measured seconds/step, projected full-matrix
-GPU-hours and cost, and which of the three pre-committed rungs (full / halved batches-per-epoch,
-all runs / 14-run reduced) is selected. This record is written into every subsequent `run.json` —
-choosing after seeing fold results is test-set tuning.
+**V gate.** Record, before any other fold starts: measured seconds/step per arm and the slowest
+arm, the solo-versus-four-concurrent contention factor, projected full-matrix GPU-hours,
+instance-hours, and cost under four concurrent independent single-GPU runs on one four-GPU
+instance, plus the serialized GPU-hour cost beside it. This is a cost-model correction made
+before any fold-1–4 result exists, not test-set tuning. Record the selected pre-committed rung
+(full / halved batches-per-epoch, all runs / 14-run reduced) in every subsequent `run.json`.
 **Closes when.** The rung is recorded and unanimous across all subsequent run configs.
 
 ## M6 — LFF
