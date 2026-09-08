@@ -4,7 +4,7 @@
 
 ## Goal
 
-Build one nnDetection task from the **1,500-case source cohort**, where every retained case trains
+Build one nnDetection task from the **1,500-case source cohort**. One declared source exclusion leaves 1,499 retained cases, where every retained case trains
 csPCa detection and **grade-resolved lesions only** carry GGG2–5 metadata for the separate grade
 head (`ARCHITECTURE.md §3, §8`;
 ADR 0002 D2). This replaces the native-4-class design of commits `cf3390b`/`1b18cab` — that design
@@ -130,7 +130,7 @@ preprocessing to rescue a case.
 ## 1.3 Definition of done
 
 - **L:** `Task2201_PICAI_csPCa/raw_splitted/` has `_0000/_0001/_0002` images and paired instance
-  volumes/JSON files for every retained source case; the source cohort remains 1,500 cases and any
+  volumes/JSON files for every retained source case; the source cohort has 1,500 cases, the retained task has 1,499 cases, and any
   full-loss positive is named in `excluded_cases.json` and absent from every fold.
 - **L:** `dataset.json["labels"] == {"0": "csPCa"}`; the planner derives `classifier_classes == 1`
   (nnDetection's own anchor head) and `in_channels == 3`.

@@ -73,7 +73,7 @@ definition, granular expert labels, `marksheet.csv`, and binary Pooch25 masks as
 positives; Pooch25 lesions never supervise the grade head.
 
 M1 writes `/workspace/det_data/Task2201_PICAI_csPCa`, installs official splits, and checks geometry,
-modalities, labels, instances, folds, patient separation, plus the three-input/four-foreground plan.
+modalities, labels, instances, folds, patient separation, plus the three-input/single-foreground plan.
 M2 preserves its initial/final loss, duration, loss components, and peak GPU memory in
 `evidence/m2/overfit.log`. M3 creates a new `Task900_PICAI_TINY` by default. If it fails, retain the
 partial task and model output for diagnosis; retry with `--m3-task Task901_PICAI_TINY` (or another
