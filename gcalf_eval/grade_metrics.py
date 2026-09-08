@@ -52,13 +52,27 @@ def supervised_instances(label_path):
 
 
 def match_grade_predictions(pred_boxes, pred_scores, pred_grade_probs, gt_boxes, gt_grades,
-                            gt_supervised=None, iou_threshold=0.1, return_details=False):
-    """Match against all lesions, then score grades only for supervised matches."""
+                            gt_supervised=None, iou_threshold=0.1, score_threshold=0.0,
+                            return_details=False):
+    """Match against all lesions, then score grades only for supervised matches.
+
+    ``grade_false_positives`` counts unmatched *detections* at greedy, score-ordered,
+    IoU >= ``iou_threshold`` matching -- including duplicate boxes on a lesion that a
+    higher-scoring box already matched. It is not a grade-classification error count.
+    There is no per-case cap on this count: nothing upstream deduplicates overlapping
+    boxes into one candidate the way ``boxes_to_detection_map`` does for
+    ``picai_score``/``lesion_ap``, so it can be much larger than the number of lesions.
+    ``score_threshold`` (default ``0.0``, i.e. today's behaviour) drops predictions
+    below it before matching, giving an explicit, recorded operating point.
+    """
     pred_boxes = np.asarray(pred_boxes, dtype=np.float32).reshape(-1, 6)
     pred_scores = np.asarray(pred_scores, dtype=np.float32).reshape(-1)
     pred_grade_probs = np.asarray(pred_grade_probs, dtype=np.float32).reshape(-1, 4)
     if len(pred_boxes) != len(pred_scores) or len(pred_boxes) != len(pred_grade_probs):
         raise ValueError("Grade predictions must align one-to-one with predicted boxes and scores")
+
+    keep = pred_scores >= score_threshold
+    pred_boxes, pred_scores, pred_grade_probs = pred_boxes[keep], pred_scores[keep], pred_grade_probs[keep]
 
     gt_boxes = np.asarray(gt_boxes, dtype=np.float32).reshape(-1, 6)
     gt_grades = np.asarray(gt_grades, dtype=np.int64).reshape(-1)
@@ -97,7 +111,12 @@ def match_grade_predictions(pred_boxes, pred_scores, pred_grade_probs, gt_boxes,
     return true_grades, predicted_grades, misses, false_positives
 
 
-def summarize_grade_matches(true_grades, predicted_grades, misses, false_positives, matched_ungraded=0):
+def summarize_grade_matches(true_grades, predicted_grades, misses, false_positives, matched_ungraded=0,
+                            num_cases=None, score_threshold=0.0):
+    """Summarize matched grades. ``grade_false_positives_per_case`` and
+    ``grade_score_threshold`` record the operating point ``grade_false_positives`` was
+    computed at; ``num_cases`` must be the case count the caller matched over (omit
+    only when the per-case rate is not needed)."""
     confusion = np.zeros((4, 4), dtype=np.int64)
     for truth, prediction in zip(true_grades, predicted_grades):
         confusion[truth - 2, prediction - 2] += 1
@@ -108,7 +127,7 @@ def summarize_grade_matches(true_grades, predicted_grades, misses, false_positiv
     recall = np.divide(tp, support, out=np.zeros_like(tp), where=support > 0)
     f1 = np.divide(2 * precision * recall, precision + recall, out=np.zeros_like(tp), where=(precision + recall) > 0)
     weighted_f1 = float(np.average(f1, weights=support)) if support.sum() else 0.0
-    return {
+    summary = {
         "grade_confusion_matrix": confusion.tolist(),
         "grade_matched_detections": int(len(true_grades)),
         "grade_matched_ungraded_lesions": int(matched_ungraded),
@@ -116,4 +135,8 @@ def summarize_grade_matches(true_grades, predicted_grades, misses, false_positiv
         "grade_false_positives": int(false_positives),
         "grade_weighted_f1": weighted_f1,
         "grade_per_class_sensitivity": {f"GGG{grade}": float(recall[grade - 2]) for grade in GRADE_VALUES},
+        "grade_score_threshold": float(score_threshold),
     }
+    if num_cases:
+        summary["grade_false_positives_per_case"] = float(false_positives) / num_cases
+    return summary

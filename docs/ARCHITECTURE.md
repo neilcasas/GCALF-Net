@@ -326,7 +326,7 @@ class LearnableFrequencyFilter3D(nn.Module):
         with torch.cuda.amp.autocast(enabled=False):
             spectrum = torch.fft.rfftn(x.float(), dim=(-3, -2, -1), norm="ortho")
             # centered on D,H; monotonic DC->Nyquist on the trailing rFFT axis (§6 bullet 1)
-            base = spherical_mask_rfft(spectrum.shape[-3:], self.radius,
+            base = spherical_mask_rfft(x.shape[-3:], self.radius,
                                        device=x.device)            # == §5's M
             delta = F.interpolate(self.delta_weight, size=spectrum.shape[-3:],
                                    mode="trilinear", align_corners=True)
