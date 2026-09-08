@@ -84,7 +84,7 @@ maybe one registry branch.
 | caf_only | Δ | | | | | |
 | gcalf_full | Δ | | | | | |
 
-Emit raw and Δ-vs-baseline. Report the detection denominator (1,500 cases) and the
+Emit raw and Δ-vs-baseline. Report the detection denominator (1,499 retained cases) and the
 grade-matched denominator (grade-supervised lesions only) beside every grade metric — never
 collapse them (`ARCHITECTURE.md §10`). Full metric computation and statistics live in
 `PHASE_6_evaluation.md`.

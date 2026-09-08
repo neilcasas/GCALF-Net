@@ -13,7 +13,7 @@ not passed. See `docs/adr/0002-*.md` for why each milestone is shaped this way.
 | M | Milestone | Phase | Goal | Gates |
 |---|---|---|---|---|
 | M0 | Environment | [0](phases/PHASE_0_environment.md) | `nndet`, PI-CAI tools, medcam all import; CUDA build verified | L, V |
-| M1 | Data pipeline | [1](phases/PHASE_1_data_pipeline.md) | Validated retained task: `csPCa` detection class, 1,500 source cases, explicit crop exclusions, and grade metadata (220+ audited lesions) | L |
+| M1 | Data pipeline | [1](phases/PHASE_1_data_pipeline.md) | Validated retained task: `csPCa` detection class, 1,499 retained cases (one source exclusion), and grade metadata (340 audited lesions) | L |
 | M2 | Baseline build (FDSF + WAF) | [2](phases/PHASE_2_baseline.md) | Input-level FDSF built; WAF wired across the five-level encoder; `fusion_levels` profiled and frozen | L, V |
 | M3 | Baseline forward + overfit | [2](phases/PHASE_2_baseline.md) | Grade head loss routing correct; 2-case overfit drives loss to ~0 | L, V |
 | M4 ⭐ | Baseline full train | [2](phases/PHASE_2_baseline.md) | Real FDSF+WAF baseline numbers on PI-CAI — thesis's first result | V |
@@ -55,11 +55,16 @@ metadata (`grade`, `grade_source`, `grade_supervised`) on every positive instanc
 graded lesions plus whatever the unifocal linkage recovery audit (Phase 1) adds from the 205
 Pooch25 cases. Official 5-fold splits loaded and independently verified.
 
-**Current status.** The label and target-independent 128 mm preprocessing rework is implemented.
-The old local task must be rebuilt: it silently retained `11050_1001070` as an empty-label case
-after losing its lesion. `gcalf_data.audit_crop_retention.py` now records every source mask's
-stage-wise retention and removes fully lost source-positive cases from every fold before conversion.
-M1 remains open until a clean rebuild, planner run, and generated report verify that behaviour.
+**Closed.** The label and target-independent 128 mm preprocessing rework is implemented.
+`gcalf_data.audit_crop_retention.py` records every source mask's stage-wise retention and removes
+fully lost source-positive cases from every fold before conversion; it excluded `11050_1001070`
+(silently retained as an empty-label case after losing its lesion under the old rule), leaving
+**1,499 retained cases / 424 positives**, of which **340 carry grade supervision** (118
+grade-unsupervised). The clean rebuild, planner run, and re-audit report ran on 2026-09-07
+(`evidence/m1/data-report-five-level-20260907.md`, `continuation-crop-retention.log`,
+`replan-five-level-20260907.log`); the generated report itself is not committed per
+`docs/data_report.md`'s own policy (it carries cohort-derived experiment evidence) — rerun
+`gcalf_data.sanity_checks` against the exact retained task to regenerate it locally.
 
 **L gate.**
 ```bash
@@ -70,8 +75,8 @@ python -m gcalf_data.sanity_checks --task-dir "$det_data/Task2201_PICAI_csPCa" \
 ```
 covering: identical spacing/orientation across T2W/ADC/HBV after resampling to a common grid;
 crop coordinates derived only from inference-available whole-gland/T2W information; no
-union/lesion-only crop path; the crop specified as a physical FOV, not a voxel count; all 425
-source positives audited for voxel/component retention by a committed script, with any exclusion recorded
+union/lesion-only crop path; the crop specified as a physical FOV, not a voxel count; all 424
+retained positives audited for voxel/component retention by a committed script, with any exclusion recorded
 under D6 item 7's predeclared rule; exactly one normalization pass;
 `dataset.json["labels"] == {"0": "csPCa"}`; every instance's detection class is `0`; every graded
 instance's `grade ∈ {2,3,4,5}`; instance-volume IDs == `case.json` keys; no `patient_id` crosses

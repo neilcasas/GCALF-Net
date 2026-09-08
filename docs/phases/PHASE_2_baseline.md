@@ -207,7 +207,7 @@ numbers are meaningless on 6 cases.
   turns into a committed budget rung.
 - Class weights for the grade loss derived per-fold from that fold's training partition only
   (§2.5); detection/segmentation losses unchanged from nnDetection's defaults.
-- Predict + evaluate per `PHASE_6_evaluation.md`: FROC/case-level AUROC over all 1,500 cases,
+- Predict + evaluate per `PHASE_6_evaluation.md`: FROC/case-level AUROC over all 1,499 retained cases,
   4×4 grade confusion matrix over grade-supervised matched lesions, weighted F1, per-grade
   sensitivity, both denominators (detection, grade-matched) reported side by side.
 - **Tag `baseline-v1`.** Every later config (LFF, CAF, full) is compared against this exact commit
