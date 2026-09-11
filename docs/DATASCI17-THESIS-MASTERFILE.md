@@ -51,7 +51,7 @@ A. Hypothesis...................................................................
 |Table|2.1:|Synthesis Table|42|
 |---|---|---|---|
 |Table|3.1:|Characteristic of PI-CAI Grand Challenge Dataset|58|
-|Table|3.2.|5x5 Confusion Matrix|67|
+|Table|3.2.|4x4 Grade Confusion Matrix|67|
 |Table|3.3:|Five-point Likert Scale|72|
 
 
@@ -216,7 +216,7 @@ The primary objective of this study is to develop and evaluate a modified hybrid
 
 ## **G. Scope and Limitations** 
 
-This study focuses on a five-level hybrid CNN–Swin Transformer for csPCa lesion detection and non-invasive GGG2–5 classification using T2W, ADC, and HBV bpMRI. All 1,500 PI-CAI cases train detection; only lesions with resolved spatial grades supervise the grade head. GGG1 is a detection-negative condition under the PI-CAI endpoint, not a foreground grading class. The target grades are favorable intermediate risk (GGG2),
+This study focuses on a five-level hybrid CNN–Swin Transformer for csPCa lesion detection and non-invasive GGG2–5 classification using T2W, ADC, and HBV bpMRI. The source PI-CAI cohort has 1,500 cases; the retained study task has 1,499 after exclusion of `11050_1001070`, and only lesions with resolved spatial grades supervise the grade head. GGG1 is a detection-negative condition under the PI-CAI endpoint, not a foreground grading class. The target grades are favorable intermediate risk (GGG2),
 
 20 
 
@@ -601,7 +601,7 @@ During the planning stage, the researchers identified the study objectives and f
 
 52 
 
-GGG2–5. ISUP 0 and GGG1 cases are detection negatives under PI-CAI's csPCa definition; GGG1 is not a foreground grade because no spatial GGG1 lesion mask exists. All 1,500 cases train the detector, while the separate four-logit grade head receives loss only from grade-resolved lesions. An ablation design with Models A through D isolates the frequency and fusion modifications individually and jointly.
+GGG2–5. ISUP 0 and GGG1 cases are detection negatives under PI-CAI's csPCa definition; GGG1 is not a foreground grade because no spatial GGG1 lesion mask exists. All 1,499 retained cases train the detector, while the separate four-logit grade head receives loss only from grade-resolved lesions. An ablation design with Models A through D isolates the frequency and fusion modifications individually and jointly.
 
 ## 2. **Pre-Processing of Dataset** 
 
@@ -615,7 +615,7 @@ This geometry is the raw nnDetection task input rather than the array presented 
 
 ## 3. **Research Analysis** 
 
-During the analysis phase, the structure and composition of the PI-CAI dataset were examined to inform both the preprocessing strategy and the experimental evaluation protocol. The dataset consists of 1,500 cases, of which 425 are csPCa-positive (ISUP ≥ 2) and 1,075 are benign or indolent, and 776 ISUP-annotated lesions (ISUP 1: 40.1%, ISUP 2: 33.5%, ISUP 3: 14.0%, ISUP 4: 5.3%, ISUP 5: 7.1%). Two consequences follow for this study. First, ISUP 1 lesions are not a grading class: under PI-CAI's csPCa reference standard they are background, so the grading endpoint is GGG2–5 and the ISUP 1 share of the marksheet does not enter the grade head at all. Second, only a subset of positive lesions carries a spatial grade annotation, so the grade-supervised denominator is much smaller than 776 and is reported separately from the 1,500-case detection denominator. The residual imbalance among GGG2–5 — where GGG 4 and GGG 5 are the smallest classes — is what necessitates the class-weighted grade loss described below.
+During the analysis phase, the structure and composition of the PI-CAI source dataset were examined to inform both the preprocessing strategy and the experimental evaluation protocol. The source dataset consists of 1,500 cases, of which 425 are csPCa-positive (ISUP ≥ 2) and 1,075 are benign or indolent, and 776 ISUP-annotated lesions. The retained study task excludes `11050_1001070`, leaving 1,499 cases, 424 positives, and 340 grade-supervised lesions. ISUP 1 lesions are not a grading class: under PI-CAI's csPCa reference standard they are background, so the grading endpoint is GGG2–5. Grade metrics report their matched grade-supervised denominator separately from the 1,499-case detection denominator.
 
 To address this imbalance, stratified random sampling is implemented at the patient level to ensure proportional representation of each Gleason Grade Group across all cross-validation folds. Patient-level sampling, rather than lesion or slice-level sampling, is used to prevent data leakage, which may occur if multiple slices from the same patient appear in both training and evaluation partitions, thereby artificially inflating performance estimates. The dataset is divided into five folds for cross-validation, with every patient case serving as a test case exactly once across the five iterations. 
 
@@ -681,7 +681,7 @@ architectural design decisions, evaluation framework, and overall scientific rig
 
 ## **d. Data Source** 
 
-The study drew exclusively on the 1,500-case PI-CAI public training and development cohort. It comprises T2W, ADC, and HBV bpMRI with a csPCa reference standard. All cases support detection training, but only grade-resolved lesion annotations support the separate GGG2–5 grade loss; binary-only positive masks are not assigned fabricated grades.
+The source dataset is the 1,500-case PI-CAI public training and development cohort. The study cohort is the retained 1,499-case task after exclusion of source case `11050_1001070`: 424 cases are csPCa-positive, and 340 lesions carry grade supervision. It comprises T2W, ADC, and HBV bpMRI with a csPCa reference standard. Only grade-resolved lesion annotations support the separate GGG2–5 grade loss; binary-only positive masks are not assigned fabricated grades.
 
 ## **E. Sampling and Data Gathering Procedure** 
 
@@ -877,13 +877,13 @@ Where:
 
 ## **g. Confusion Matrix** 
 
-The Confusion Matrix provides a granular $5 \times 5$ evaluation of the four model configurations by mapping predicted GGG classifications against biopsy-confirmed ground truths. Utilizing a One-vs-All framework, this matrix enables a detailed analysis of error patterns that global metrics may obscure. The diagonal elements ( _TPi_ signify correct classifications, while off-diagonal cells identify specific diagnostic errors: those above the diagonal represent under-estimation (Type II error), and those below represent over-estimation (Type I error). This mapping is essential for validating how the LFF and CAF modules improve discrimination at critical clinical boundaries. 
+The Confusion Matrix provides a granular $4 \times 4$ evaluation of the four target grades (GGG2–5) by mapping predicted grades against matched, grade-supervised ground truths. It enables analysis of error patterns that global metrics may obscure. The diagonal elements signify correct classifications, while off-diagonal cells identify specific under- and over-estimation errors. This mapping is essential for validating how the LFF and CAF modules improve discrimination at critical clinical boundaries.
 
 68 
 
 ## **Table 3.2.** _4x4 Grade Confusion Matrix_ 
 
-Computed over grade-supervised lesions matched to a detection, with the grade-matched denominator reported alongside the 1,500-case detection denominator.
+Computed over grade-supervised lesions matched to a detection, with the grade-matched denominator reported alongside the retained 1,499-case detection denominator.
 
 ||GGG 2|GGG 3|GGG 4|GGG 5|
 |---|---|---|---|---|
@@ -1083,6 +1083,33 @@ using a five-point Likert scale measuring alignment with PI-RADS version 2 clini
 reported mean scores of 4.4 for explanation usefulness and 4.0 for heatmap-region correspondence using a similar five-point scale with board-certified radiologists. 
 
 75 
+
+## **Chapter IV Results and Discussion**
+
+This chapter reports results only after the pre-registered baseline and ablation runs complete.
+The detection denominator is the retained 1,499-case study cohort; grade outcomes use only
+matched, grade-supervised GGG2–5 lesions and state that denominator beside each result.
+
+### **A. Baseline Results**
+
+Table 4.1 will report the `baseline-v1` fold-0 validation result: FROC, case-level AUROC,
+lesion average precision, weighted grade F1, the 4×4 grade confusion matrix, per-grade
+sensitivity, grade misses, and false positives. The associated wall time and seconds per optimizer
+step will be reported as the M5 pilot measurement.
+
+### **B. Ablation Results and Discussion**
+
+The final comparison will place baseline, LFF-only, CAF-only, and full GCALF-Net in one table.
+Baseline is the reference column and every other arm reports both raw values and deltas. No
+interpretation will be made from partial folds or from a run outside the M5-recorded rung.
+
+## **Chapter V Conclusions and Recommendations**
+
+The conclusions will answer the study questions using the completed five-fold, pre-registered
+comparison. They will distinguish detection performance from lesion-grade performance, state the
+retained-cohort and grade-supervised denominators, and avoid clinical claims beyond this
+retrospective PI-CAI evaluation. Recommendations will cover external validation, prospective
+clinical evaluation, and reproduction with the frozen configuration and evidence records.
 
 ## **References** 
 

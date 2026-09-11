@@ -1,4 +1,6 @@
-# GCALF configuration scaffold
+# GCALF configuration location
 
-Milestones M5-M7 add the baseline, LFF-only, CAF-only, and full-GCALF Hydra
-configuration files in this directory.
+The authoritative Hydra configs are versioned under `nndet/conf/train/`:
+`gcalf_baseline.yaml`, `gcalf_lff.yaml`, `gcalf_caf.yaml`, and `gcalf_full.yaml`.
+This directory remains a documentation-only compatibility scaffold; it is not a Hydra
+search path and must not be used as an audit source.
