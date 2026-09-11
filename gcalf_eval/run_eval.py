@@ -40,6 +40,7 @@ METRIC_FIELDS = (
     "grade_balanced_accuracy",
     "grade_macro_ovr_auroc",
     "grade_multiclass_brier",
+    "grade_negative_log_likelihood",
     "grade_expected_calibration_error",
     "grade_mean_confidence",
 )

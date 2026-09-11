@@ -11,3 +11,15 @@ exp:
 trainer_cfg:
   max_num_epochs: 12
   swa_epochs: 0
+
+# `scripts/grade_refit.py` is the only consumer of this pilot mode.  The
+# standard Lightning trainer remains the default multitask training path.
+grade_refit:
+  enabled: false
+  source_checkpoint: null
+  split_manifest: null
+  output_dir: null
+  epochs: 12
+  train_batches_per_epoch: 250
+  validation_batches_per_epoch: 100
+  seed: 2026
