@@ -889,6 +889,7 @@ class RetinaUNetModule(LightningBaseModuleSWA):
               train_data_dir: os.PathLike,
               case_ids: Sequence[str],
               run_prediction: bool = True,
+              source_models: os.PathLike = None,
               **kwargs,
               ) -> Dict[str, Any]:
         """
@@ -929,7 +930,7 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                 target_dir=prediction_dir,
                 cfg=cfg,
                 plan=self.plan,
-                source_models=save_dir,
+                source_models=source_models or save_dir,
                 num_models=1,
                 num_tta_transforms=None,
                 case_ids=case_ids,

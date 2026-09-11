@@ -1,0 +1,13 @@
+# @package __global__
+defaults:
+  - gcalf_baseline
+
+# An isolated run to inspect the early grade-loss minimum before committing a
+# revised full cross-validation protocol.  It retains labels, fold, sampling,
+# and detection objective; only the run duration is shortened.
+exp:
+  tag: "_gradepilot"
+
+trainer_cfg:
+  max_num_epochs: 12
+  swa_epochs: 0

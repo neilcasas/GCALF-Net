@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HOST = ROOT / "cloud" / "vast" / "host.sh"
 DOWNLOAD = ROOT / "cloud" / "vast" / "download_picai.sh"
 EXPORT = ROOT / "cloud" / "vast" / "export_results.sh"
+PAUSE_AND_BACKUP = ROOT / "cloud" / "vast" / "pause_and_backup.sh"
 
 
 def run_script(script: Path, *args: str, cwd=None):
@@ -101,3 +102,17 @@ def test_export_refuses_existing_output_and_archives_required_contents(tmp_path)
     )
     assert result.returncode == 2
     assert "refusing to overwrite" in result.stderr
+
+
+def test_pause_and_backup_creates_a_checksumming_snapshot_without_a_process(tmp_path):
+    source = tmp_path / "fold1"
+    source.mkdir()
+    (source / "model_last.ckpt").write_text("checkpoint")
+    backup = tmp_path / "backup"
+
+    result = run_script(PAUSE_AND_BACKUP, "--source-dir", str(source), "--backup-dir", str(backup))
+
+    assert result.returncode == 0, result.stderr
+    assert (backup / "SHA256SUMS").is_file()
+    with tarfile.open(backup / "final_1_fold1.tar") as archive:
+        assert "fold1/model_last.ckpt" in archive.getnames()

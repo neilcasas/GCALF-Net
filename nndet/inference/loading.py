@@ -84,8 +84,12 @@ def load_final_model(
     assert num_models == 1, f"load_final_model only supports num_models=1, found {num_models}"
     logger.info(f"Loading {identifier} model")
 
-    model_names = list(source_models.glob('*.ckpt'))
-    model_names = [m for m in model_names if identifier in str(m.stem)]
+    exact_name = identifier if identifier.endswith(".ckpt") else f"{identifier}.ckpt"
+    exact_path = source_models / exact_name
+    if exact_path.is_file():
+        model_names = [exact_path]
+    else:
+        model_names = [m for m in source_models.glob('*.ckpt') if identifier in str(m.stem)]
     assert len(model_names) == 1, f"Found wrong number of models, {model_names} in {source_models} with {identifier}"
 
     path = model_names[0]
