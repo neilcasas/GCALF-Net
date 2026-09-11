@@ -2,9 +2,11 @@
 import argparse
 import hashlib
 import json
+import random
 from collections import OrderedDict
 from pathlib import Path
 
+import numpy as np
 import torch
 from omegaconf import OmegaConf
 
@@ -37,7 +39,18 @@ def main():
     parser.add_argument("--condition", choices=("control", "regularized"), required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--epochs", type=int, default=12)
+    parser.add_argument("--train-batches", type=int, default=250)
+    parser.add_argument("--validation-batches", type=int, default=100)
+    parser.add_argument("--seed", type=int, default=2026)
     args = parser.parse_args()
+    if min(args.epochs, args.train_batches, args.validation_batches) <= 0:
+        parser.error("--epochs, --train-batches, and --validation-batches must be positive")
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     cfg = OmegaConf.load(args.config)
     plan = load_pickle(args.plan)
@@ -67,27 +80,31 @@ def main():
     loop = GradeRefitLoop(module, class_weights, weight_decay)
     history = []
     best = (float("inf"), None)
-    for epoch in range(1, 13):
+    for epoch in range(1, args.epochs + 1):
         train_loader, val_loader = iter(datamodule.train_dataloader()), iter(datamodule.val_dataloader())
         updates_before = loop.supervised_updates
-        [loop.train_batch(next(train_loader)) for _ in range(250)]
-        val_loss = loop.validation_loss(next(val_loader) for _ in range(100))
+        [loop.train_batch(next(train_loader)) for _ in range(args.train_batches)]
+        val_loss = loop.validation_loss(next(val_loader) for _ in range(args.validation_batches))
         loop.verify()
         record = {"epoch": epoch, "validation_grade_loss": val_loss,
-                  "sampled_train_batches": 250,
+                  "sampled_train_batches": args.train_batches,
                   "supervised_optimizer_updates": loop.supervised_updates - updates_before}
         history.append(record)
-        torch.save({"state_dict": module.state_dict(), "pilot": record, "source_checkpoint": str(args.source_checkpoint)},
+        torch.save({"state_dict": module.state_dict(), "optimizer_state_dict": loop.optimizer.state_dict(),
+                    "pilot": record, "source_checkpoint": str(args.source_checkpoint)},
                    output / ("epoch_%02d.ckpt" % epoch))
         if val_loss is not None and val_loss < best[0]:
             best = (val_loss, epoch)
-            torch.save({"state_dict": module.state_dict(), "pilot": record,
+            torch.save({"state_dict": module.state_dict(), "optimizer_state_dict": loop.optimizer.state_dict(),
+                        "pilot": record,
                         "source_checkpoint": str(args.source_checkpoint)}, output / "model_best_grade.ckpt")
     (output / "learning_curve.json").write_text(json.dumps(history, indent=2) + "\n")
     source_hash = _sha256(args.source_checkpoint)
     (output / "manifest.json").write_text(json.dumps({"condition": args.condition, "weight_decay": weight_decay,
         "source_checkpoint": str(args.source_checkpoint), "split_manifest": str(args.split_manifest),
         "source_checkpoint_sha256": source_hash, "best_epoch": best[1],
+        "seed": args.seed, "epochs": args.epochs, "train_batches_per_epoch": args.train_batches,
+        "validation_batches_per_epoch": args.validation_batches,
         "selection_rule": "earliest minimum validation grade loss"}, indent=2) + "\n")
 
 
