@@ -156,6 +156,7 @@ def _calibration_summary(true_grades, probabilities, bins=10):
     correct = predictions == truths
     one_hot = np.eye(len(GRADE_VALUES))[truths]
     brier = float(np.mean(np.square(probabilities - one_hot).sum(axis=1)))
+    nll = float(-np.log(np.clip(probabilities[np.arange(len(truths)), truths], 1e-7, 1.0)).mean())
     ece = 0.0
     for lower in np.linspace(0.0, 1.0, bins, endpoint=False):
         upper = lower + 1.0 / bins
@@ -164,6 +165,7 @@ def _calibration_summary(true_grades, probabilities, bins=10):
             ece += float(mask.mean() * abs(confidence[mask].mean() - correct[mask].mean()))
     return {
         "grade_multiclass_brier": brier,
+        "grade_negative_log_likelihood": nll,
         "grade_expected_calibration_error": float(ece),
         "grade_mean_confidence": float(confidence.mean()),
         "grade_mean_confidence_correct": float(confidence[correct].mean()) if correct.any() else None,
@@ -202,6 +204,7 @@ def summarize_grade_matches(true_grades, predicted_grades, misses, false_positiv
         "grade_macro_f1": macro_f1,
         "grade_balanced_accuracy": balanced_accuracy,
         "grade_per_class_sensitivity": {f"GGG{grade}": float(recall[grade - 2]) for grade in GRADE_VALUES},
+        "grade_class_support": {f"GGG{grade}": int(support[grade - 2]) for grade in GRADE_VALUES},
         "grade_score_threshold": float(score_threshold),
     }
     if num_cases:
