@@ -108,6 +108,10 @@ inherited from the config default. The frozen subset is shared verbatim by WAF a
 arms and is never revisited after fold results exist.
 **Closes when.** Both modules pass their tests and are wired as the `baseline` config's default.
 
+**Closure record (2026-09-08).** `evidence/caf-fusion-profile-20260908.json` measured the
+five-level WAF profile at 3.26 GB peak, below the accepted 22.77 GB budget. Therefore
+`fusion_levels: [0, 1, 2, 3, 4]` is frozen for every arm.
+
 ## M3 — Baseline forward pass + grade-head overfit
 
 **Goal.** The two-head model (detection + masked grade head, `ARCHITECTURE.md §8`) instantiates,
@@ -142,10 +146,12 @@ the ladder rung first.
 **Goal.** Turn the fold-0 pilot's measured seconds/step into a committed matrix plan, per
 `ARCHITECTURE.md §9` and ADR 0002 D10 (planned rung: full 20-run matrix, $150–350 budget).
 
-**V gate.** Record, before any other fold starts: measured seconds/step, projected full-matrix
-GPU-hours and cost, and which of the three pre-committed rungs (full / halved batches-per-epoch,
-all runs / 14-run reduced) is selected. This record is written into every subsequent `run.json` —
-choosing after seeing fold results is test-set tuning.
+**V gate.** Record, before any other fold starts: measured seconds/step per arm and the slowest
+arm, the solo-versus-four-concurrent contention factor, projected full-matrix GPU-hours,
+instance-hours, and cost under four concurrent independent single-GPU runs on one four-GPU
+instance, plus the serialized GPU-hour cost beside it. This is a cost-model correction made
+before any fold-1–4 result exists, not test-set tuning. Record the selected pre-committed rung
+(full / halved batches-per-epoch, all runs / 14-run reduced) in every subsequent `run.json`.
 **Closes when.** The rung is recorded and unanimous across all subsequent run configs.
 
 ## M6 — LFF
@@ -180,6 +186,14 @@ segment with finite losses.
 **Closes when.** Tests pass; `caf_only` completes tiny train/resume/predict/eval.
 **Watch.** If windowed attention will not fit, walk the fallback ladder (`ARCHITECTURE.md §7`)
 and report the resolved architecture. BiFusion is never relabeled CAF.
+
+## Roadmap amendment — 2026-09-08
+
+M6 and M7 CUDA tiny validation gates were scheduled on spare GPUs while the restarted M4 fold-0
+baseline was training and before M5's pilot record. This is a deliberate ordering deviation from
+the sequential rule above. It does not authorize any fold-1–4 or matrix launch: those remain
+blocked until M5 records the measured cost rung. The deviation, commands, commits, and results
+must be preserved in M11 evidence.
 
 ## M8 — Full GCALF-Net + ablation matrix
 

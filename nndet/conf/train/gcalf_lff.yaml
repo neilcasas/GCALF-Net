@@ -1,0 +1,13 @@
+# @package __global__
+defaults:
+  - gcalf_baseline
+
+model_cfg:
+  encoder_kwargs:
+    gcalf_cfg:
+      frequency_filter_type: lff
+      lff:
+        # Keep the FDSF radius so LFF is exactly the baseline at initialization.
+        radius: 0.15
+        grid_size: [4, 8, 8]
+        groups: 1

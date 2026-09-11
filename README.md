@@ -23,12 +23,10 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
 [`docs/adr/0002-ggg2-5-masked-grade-head-and-built-fdr-waf.md`](docs/adr/0002-ggg2-5-masked-grade-head-and-built-fdr-waf.md)
 for why it is shaped this way.
 
-**Implementation gap, stated plainly:** `gcalf_data/{build_labels,prepare_picai,sanity_checks}.py`
-and `tests/gcalf/{test_data_preparation,test_data_sanity_checks}.py` currently implement an
-earlier, rejected native-4-class design (one detection class per grade, `classifier_classes=4`,
-no separate grade head). They have not yet been reworked for the two-head contract above —
-[Phase 1](docs/phases/PHASE_1_data_pipeline.md) tracks that work. Do not treat their current
-passing tests as evidence the described protocol is implemented.
+The former native-4-class implementation gap is closed: the data preparation and sanity-check
+paths implement the one-class csPCa detector with grade metadata for the masked four-logit head.
+Their focused tests are evidence only when run against the retained task and its generated audit
+artifacts; they do not substitute for the M1 dataset gate.
 
 Neither the frequency module (FDR) nor the fusion module (WAF) this thesis's baseline requires
 exists in the released code today — both must be built ([Phase 2](docs/phases/PHASE_2_baseline.md)).
