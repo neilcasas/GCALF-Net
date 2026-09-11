@@ -35,6 +35,13 @@ METRIC_FIELDS = (
     "grade_false_positives_per_case",
     "grade_score_threshold",
     "grade_weighted_f1",
+    "grade_accuracy",
+    "grade_macro_f1",
+    "grade_balanced_accuracy",
+    "grade_macro_ovr_auroc",
+    "grade_multiclass_brier",
+    "grade_expected_calibration_error",
+    "grade_mean_confidence",
 )
 
 
@@ -140,7 +147,7 @@ def run_evaluation(
 
     detection_maps = []
     ground_truth_masks = []
-    grade_true, grade_predicted = [], []
+    grade_true, grade_predicted, grade_probabilities = [], [], []
     grade_misses = grade_false_positives = grade_matched_ungraded = 0
     has_grade_predictions = True
     for case_id in expected_case_ids:
@@ -158,12 +165,13 @@ def run_evaluation(
             has_grade_predictions = False
         else:
             gt_boxes, gt_grades, gt_supervised = lesion_instances(ground_truth_dir / f"{case_id}.nii.gz")
-            truth, predicted, misses, false_positives, matched_ungraded = match_grade_predictions(
+            truth, predicted, probabilities, misses, false_positives, matched_ungraded = match_grade_predictions(
                 prediction["pred_boxes"], prediction["pred_scores"], prediction["pred_grade_probs"],
                 gt_boxes, gt_grades, gt_supervised, score_threshold=grade_score_threshold,
-                return_details=True)
+                return_details=True, return_probabilities=True)
             grade_true.extend(truth)
             grade_predicted.extend(predicted)
+            grade_probabilities.extend(probabilities)
             grade_misses += misses
             grade_false_positives += false_positives
             grade_matched_ungraded += matched_ungraded
@@ -195,6 +203,7 @@ def run_evaluation(
         row.update(summarize_grade_matches(
             grade_true, grade_predicted, grade_misses, grade_false_positives, grade_matched_ungraded,
             num_cases=len(expected_case_ids), score_threshold=grade_score_threshold,
+            matched_probabilities=grade_probabilities,
         ))
     if not all(math.isfinite(float(row[field])) for field in ("picai_score", "auroc", "lesion_ap")):
         raise ValueError(f"PI-CAI metrics are not finite: {row}")
@@ -240,18 +249,34 @@ def main() -> None:
     parser.add_argument("--fold", type=int, default=0)
     parser.add_argument("--split", choices=("test", "val"), default="test")
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--prediction-dir", type=Path,
+                        help="Evaluate this restored prediction directory instead of the model's default split path.")
+    parser.add_argument("--ground-truth-dir", type=Path,
+                        help="Ground-truth label directory required with --prediction-dir.")
+    parser.add_argument("--case-ids-file", type=Path,
+                        help="One case identifier per line; required with --prediction-dir.")
     parser.add_argument(
         "--grade-score-threshold", type=float, default=0.0,
         help="Drop grade-matching predictions scoring below this before matching (default: 0.0, i.e. no threshold).",
     )
     args = parser.parse_args()
 
-    prediction_dir, ground_truth_dir, case_ids, default_output_dir, task_name = _resolve_paths(
-        args.task,
-        args.model,
-        args.fold,
-        args.split,
-    )
+    direct_paths = (args.prediction_dir, args.ground_truth_dir, args.case_ids_file)
+    if any(path is not None for path in direct_paths):
+        if not all(path is not None for path in direct_paths):
+            parser.error("--prediction-dir, --ground-truth-dir, and --case-ids-file must be supplied together")
+        prediction_dir = args.prediction_dir
+        ground_truth_dir = args.ground_truth_dir
+        case_ids = [line.strip() for line in args.case_ids_file.read_text().splitlines() if line.strip()]
+        default_output_dir = prediction_dir.parent / "picai_results"
+        task_name = args.task
+    else:
+        prediction_dir, ground_truth_dir, case_ids, default_output_dir, task_name = _resolve_paths(
+            args.task,
+            args.model,
+            args.fold,
+            args.split,
+        )
     row = run_evaluation(
         prediction_dir=prediction_dir,
         ground_truth_dir=ground_truth_dir,

@@ -89,6 +89,10 @@ def sweep():
                         help="full name of experiment to sweep e.g. RetinaUNetV0_D3V001_3d")
     parser.add_argument('fold', type=int,
                         help="experiment fold")
+    parser.add_argument('--checkpoint', default='last',
+                        help="Checkpoint identifier, e.g. last, best, or model_best_grade")
+    parser.add_argument('--output-dir', type=Path,
+                        help="Write sweep/predictions here instead of the training directory")
     args = parser.parse_args()
     task = args.task
     model = args.model
@@ -97,6 +101,8 @@ def sweep():
         task=task,
         model=model,
         fold=fold,
+        checkpoint=args.checkpoint,
+        output_dir=args.output_dir,
         )
 
 
@@ -281,6 +287,17 @@ def _train(
     )
     checkpoint_cb.CHECKPOINT_NAME_LAST = 'model_last'
     callbacks.append(checkpoint_cb)
+    grade_monitor_key = cfg["trainer_cfg"].get("grade_monitor_key")
+    if grade_monitor_key is not None:
+        grade_checkpoint_cb = ModelCheckpoint(
+            dirpath=train_dir,
+            filename='model_best_grade',
+            save_last=False,
+            save_top_k=1,
+            monitor=grade_monitor_key,
+            mode=cfg["trainer_cfg"].get("grade_monitor_mode", "min"),
+        )
+        callbacks.append(grade_checkpoint_cb)
     callbacks.append(LearningRateMonitor(logging_interval="epoch"))
 
     if is_primary:
@@ -372,6 +389,8 @@ def _sweep(
     task: str,
     model: str,
     fold: int,
+    checkpoint: str = "last",
+    output_dir: Path = None,
     ):
     """
     Determine best postprocessing parameters for a trained model
@@ -402,45 +421,56 @@ def _sweep(
     plan = load_pickle(train_dir / "plan.pkl")
     data_dir = Path(cfg.host["preprocessed_output_dir"]) / plan["data_identifier"] / "imagesTr"
 
+    trainer_cfg = OmegaConf.to_container(cfg["trainer_cfg"], resolve=True)
+    trainer_cfg["sweep_ckpt"] = checkpoint
     module = MODULE_REGISTRY[cfg["module"]](
         model_cfg=OmegaConf.to_container(cfg["model_cfg"], resolve=True),
-        trainer_cfg=OmegaConf.to_container(cfg["trainer_cfg"], resolve=True),
+        trainer_cfg=trainer_cfg,
         plan=plan,
         )
 
     splits = load_pickle(train_dir / "splits.pkl")
     case_ids = splits[cfg["exp"]["fold"]]["val"]
+    target_dir = Path(output_dir) if output_dir is not None else train_dir
+    target_dir.mkdir(parents=True, exist_ok=True)
     inference_plan = module.sweep(
         cfg=OmegaConf.to_container(cfg, resolve=True),
-        save_dir=train_dir,
+        save_dir=target_dir,
+        source_models=train_dir,
         train_data_dir=data_dir,
         case_ids=case_ids,
         run_prediction=True, # TODO: add commmand line arg
     )
 
     plan["inference_plan"] = inference_plan
-    save_pickle(plan, train_dir / "plan_inference.pkl")
+    save_pickle(plan, target_dir / "plan_inference.pkl")
 
     ensembler_cls = module.get_ensembler_cls(
         key="boxes", dim=plan["network_dim"]) # TODO: make this configurable    
     for restore in [True, False]:
-        target_dir = train_dir / "val_predictions" if restore else \
-            train_dir / "val_predictions_preprocessed"
-        extract_results(source_dir=train_dir / "sweep_predictions",
-                        target_dir=target_dir,
+        prediction_export_dir = target_dir / "val_predictions" if restore else \
+            target_dir / "val_predictions_preprocessed"
+        extract_results(source_dir=target_dir / "sweep_predictions",
+                        target_dir=prediction_export_dir,
                         ensembler_cls=ensembler_cls,
                         restore=restore,
                         **inference_plan,
                         )
 
-    _evaluate(
-        task=cfg["task"],
-        model=cfg["exp"]["id"],
-        fold=cfg["exp"]["fold"],
-        test=False,
-        do_boxes_eval=True, # TODO: make this configurable
-        do_analyze_boxes=True, # TODO: make this configurable
-    )
+    if target_dir == train_dir:
+        _evaluate(
+            task=cfg["task"],
+            model=cfg["exp"]["id"],
+            fold=cfg["exp"]["fold"],
+            test=False,
+            do_boxes_eval=True, # TODO: make this configurable
+            do_analyze_boxes=True, # TODO: make this configurable
+        )
+    else:
+        logger.info(
+            f"Checkpoint predictions are in {target_dir / 'val_predictions'}; "
+            "run gcalf_eval.run_eval with --prediction-dir to calculate lesion-level grade metrics."
+        )
 
 
 def _evaluate(

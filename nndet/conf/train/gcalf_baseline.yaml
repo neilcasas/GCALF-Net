@@ -2,6 +2,13 @@
 defaults:
   - v001
 
+trainer_cfg:
+  # Detection and grading peak at different epochs.  Keep both selections;
+  # ``model_best`` remains the detection-mAP checkpoint and this creates
+  # ``model_best_grade`` from the masked validation grade cross-entropy.
+  grade_monitor_key: "val_grade"
+  grade_monitor_mode: "min"
+
 model_cfg:
   encoder_kwargs:
     gcalf_cfg:
