@@ -54,6 +54,50 @@ class GradeAnchorFeatureExtractor(BaseClassifier):
     def box_logits_to_probs(self, box_logits: Tensor) -> Tensor:
         raise NotImplementedError("GradeAnchorFeatureExtractor emits features, not logits")
 
+    def build_conv_out(self, conv):
+        """Emit one internal_channels-wide feature per voxel, not one per anchor slot.
+
+        BaseClassifier.build_conv_out emits ``num_classes * anchors_per_pos`` channels
+        so each anchor at a voxel gets its own logits -- correct for detection, where
+        anchors sharing a voxel need different box scores. The grade decision has no
+        such per-anchor signal: GradeHead projects a single per-voxel feature to grade
+        logits with one small Linear layer, so 27 independently-parameterized copies of
+        that projection (inherited from `num_classes=internal_channels` at 27
+        anchors/position) bought ~11.9M of this head's ~12.8M parameters with no
+        matching increase in real capacity. ``forward`` below expands the single
+        per-voxel feature across anchors explicitly instead of relying on distinct
+        learned channels per anchor.
+        """
+        return conv(
+            self.internal_channels,
+            self.internal_channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            add_norm=False,
+            add_act=False,
+            bias=True,
+        )
+
+    def forward(self, x: Tensor, level: int, **kwargs) -> Tensor:
+        """Produce per-anchor features by repeating each voxel's feature across its
+        anchors_per_pos slots, rather than learning anchors_per_pos independent
+        projections of it.
+
+        Row order must match the anchor generator / box_logits contract: voxel-major,
+        anchor fastest, i.e. ``row = voxel * anchors_per_pos + anchor``
+        (`nndet/core/boxes/anchors.py`, `BaseClassifier.forward`). `repeat_interleave`
+        on the voxel axis produces exactly that; `repeat` would instead tile the whole
+        voxel sequence `anchors_per_pos` times (``row = anchor * num_voxels +
+        voxel``), which is shape-identical but silently attaches each detection's
+        grade to the wrong voxel.
+        """
+        features = self.conv_out(self.conv_internal(x))
+        axes = (0, 2, 3, 1) if self.dim == 2 else (0, 2, 3, 4, 1)
+        features = features.permute(*axes).contiguous()
+        features = features.view(x.size()[0], -1, self.internal_channels)
+        return features.repeat_interleave(self.anchors_per_pos, dim=1)
+
 
 class GradeClassifierHead(nn.Module):
     def __init__(self, feature_extractor: GradeAnchorFeatureExtractor, grade_head: GradeHead):

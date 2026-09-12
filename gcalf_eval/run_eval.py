@@ -34,6 +34,7 @@ METRIC_FIELDS = (
     "grade_false_positives",
     "grade_false_positives_per_case",
     "grade_score_threshold",
+    "detection_score_threshold",
     "grade_weighted_f1",
     "grade_accuracy",
     "grade_macro_f1",
@@ -54,6 +55,26 @@ def _box_coordinate_pairs(dimensions: int) -> Sequence[Tuple[int, int]]:
     raise ValueError(f"Only 2D and 3D boxes are supported, found {dimensions} dimensions")
 
 
+def _filter_prediction_by_score(prediction: Dict, score_threshold: float) -> Dict:
+    """Drop low-confidence candidates before they can bridge distinct lesions together.
+
+    Keeps ``pred_boxes``/``pred_scores``/``pred_labels``/``pred_grade_probs`` aligned by
+    filtering them with the same boolean mask; other keys (e.g.
+    ``original_size_of_raw_data``) pass through unchanged.
+    """
+    if score_threshold <= 0.0:
+        return prediction
+    scores = np.asarray(prediction["pred_scores"], dtype=np.float64).reshape(-1)
+    keep = scores >= score_threshold
+    filtered = dict(prediction)
+    filtered["pred_boxes"] = np.asarray(prediction["pred_boxes"])[keep]
+    filtered["pred_scores"] = scores[keep]
+    filtered["pred_labels"] = np.asarray(prediction["pred_labels"]).reshape(-1)[keep]
+    if "pred_grade_probs" in prediction:
+        filtered["pred_grade_probs"] = np.asarray(prediction["pred_grade_probs"])[keep]
+    return filtered
+
+
 def boxes_to_detection_map(prediction: Dict) -> np.ndarray:
     """Rasterize restored nnDetection boxes into a PI-CAI detection map.
 
@@ -63,6 +84,18 @@ def boxes_to_detection_map(prediction: Dict) -> np.ndarray:
     softmax volume. Consolidating each connected candidate to its maximum
     score preserves the post-NMS confidence while producing the required
     detection-map representation.
+
+    Connectivity here must match picai_eval's own (26-connected,
+    ``picai_eval.analysis_utils.label_structure``): picai_eval re-labels
+    ``y_det`` itself and rejects any map where its component count is lower
+    than its count of distinct nonzero values ("softmax volume" check). Using
+    a finer connectivity here can leave two of our components holding
+    different scores that picai_eval's own 26-connectivity then merges into
+    one -- verified empirically: it makes every case in a 40-case,
+    4-arm smoke check raise `parse_detection_map`'s "softmax volumes instead
+    of detection maps" error. Score filtering in ``_filter_prediction_by_score``
+    is therefore the only lever here for reducing how much of the volume
+    low-confidence, unthresholded boxes bridge together.
     """
     shape = tuple(int(value) for value in np.asarray(prediction["original_size_of_raw_data"]).tolist())
     if not shape or any(value <= 0 for value in shape):
@@ -129,6 +162,7 @@ def run_evaluation(
     fold: int,
     split: str,
     grade_score_threshold: float = 0.0,
+    detection_score_threshold: float = 0.0,
 ) -> Dict[str, object]:
     """Evaluate exactly the requested cases and persist the M3 metric artifacts."""
     prediction_dir = Path(prediction_dir)
@@ -153,7 +187,9 @@ def run_evaluation(
     has_grade_predictions = True
     for case_id in expected_case_ids:
         prediction = load_pickle(prediction_dir / f"{case_id}_boxes.pkl")
-        detection_map = boxes_to_detection_map(prediction)
+        detection_map = boxes_to_detection_map(
+            _filter_prediction_by_score(prediction, detection_score_threshold)
+        )
         ground_truth = _load_ground_truth(ground_truth_dir / f"{case_id}.nii.gz")
         if detection_map.shape != ground_truth.shape:
             raise ValueError(
@@ -199,6 +235,7 @@ def run_evaluation(
         "picai_score": metrics.score,
         "auroc": metrics.auroc,
         "lesion_ap": metrics.AP,
+        "detection_score_threshold": detection_score_threshold,
     }
     if has_grade_predictions:
         row.update(summarize_grade_matches(
@@ -260,6 +297,12 @@ def main() -> None:
         "--grade-score-threshold", type=float, default=0.0,
         help="Drop grade-matching predictions scoring below this before matching (default: 0.0, i.e. no threshold).",
     )
+    parser.add_argument(
+        "--detection-score-threshold", type=float, default=0.0,
+        help="Drop candidates scoring below this before painting the PI-CAI detection map "
+             "(default: 0.0, i.e. no threshold). Distinct from --grade-score-threshold, which "
+             "only gates grade matching and has no effect on lesion_ap.",
+    )
     args = parser.parse_args()
 
     direct_paths = (args.prediction_dir, args.ground_truth_dir, args.case_ids_file)
@@ -288,6 +331,7 @@ def main() -> None:
         fold=args.fold,
         split=args.split,
         grade_score_threshold=args.grade_score_threshold,
+        detection_score_threshold=args.detection_score_threshold,
     )
     print(row)
 
