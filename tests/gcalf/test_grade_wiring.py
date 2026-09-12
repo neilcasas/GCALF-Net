@@ -91,6 +91,52 @@ def test_grade_classifier_head_output_count_matches_box_logits_arithmetic():
     assert logits.shape == (expected_anchors, 4)
 
 
+def test_grade_feature_rows_repeat_per_voxel_not_per_block():
+    """Guards the row contract (ARCHITECTURE.md F9): rows are voxel-major, anchor
+    fastest (`row = voxel * anchors_per_pos + anchor`). A `repeat`-vs-`repeat_interleave`
+    mix-up would be shape-identical everywhere else in the stack but would silently
+    attach each detection's grade feature to the wrong voxel."""
+    torch.manual_seed(0)
+    conv = Generator(ConvInstanceRelu, 3)
+    anchors_per_pos = 3
+    internal_channels = 5
+    feature_extractor = GradeAnchorFeatureExtractor(
+        conv=conv, in_channels=4, internal_channels=internal_channels,
+        anchors_per_pos=anchors_per_pos, num_levels=1)
+
+    # Each voxel of this 3x3x3 map holds a distinct constant so the extractor's
+    # output is expected to differ from voxel to voxel.
+    num_voxels = 3 * 3 * 3
+    x = torch.arange(num_voxels, dtype=torch.float32).view(1, 1, 3, 3, 3).expand(1, 4, 3, 3, 3).contiguous()
+
+    features = feature_extractor(x, level=0)
+
+    assert features.shape == (1, num_voxels * anchors_per_pos, internal_channels)
+    for voxel in range(num_voxels):
+        block = features[0, voxel * anchors_per_pos:(voxel + 1) * anchors_per_pos]
+        assert torch.equal(block, block[0].expand_as(block))
+    assert not torch.equal(features[0, 0], features[0, anchors_per_pos])
+
+
+def test_grade_anchor_feature_extractor_does_not_scale_conv_out_with_anchors():
+    """The grade branch's parameter blowup (F2) was `conv_out` emitting
+    `internal_channels * anchors_per_pos` channels for a decision that doesn't need
+    per-anchor capacity. `build_conv_out` must emit `internal_channels` regardless of
+    `anchors_per_pos`."""
+    conv = Generator(ConvInstanceRelu, 3)
+    small = GradeAnchorFeatureExtractor(
+        conv=conv, in_channels=4, internal_channels=8, anchors_per_pos=1, num_levels=1)
+    large = GradeAnchorFeatureExtractor(
+        conv=conv, in_channels=4, internal_channels=8, anchors_per_pos=27, num_levels=1)
+
+    small_params = sum(p.numel() for p in small.conv_out.parameters())
+    large_params = sum(p.numel() for p in large.conv_out.parameters())
+
+    assert small_params == large_params
+    # Conv3d(8 -> 8, k=3) + bias: 8*8*27 + 8.
+    assert large_params == 8 * 8 * 27 + 8
+
+
 def test_grade_classifier_head_gradients_reach_both_stages():
     torch.manual_seed(0)
     conv = Generator(ConvInstanceRelu, 3)
