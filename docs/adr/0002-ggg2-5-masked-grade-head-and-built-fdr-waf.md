@@ -48,7 +48,8 @@ Supersedes ADR 0001 decision 1's implicit single-classifier framing and the four
 native-instance design of commits `cf3390b`/`1b18cab`. The model has:
 
 - **One detection foreground class, `csPCa`**, trained on all 424 retained positives
-  (340 grade-supervised and 118 grade-unsupervised) plus all 1,075 benign/GGG1 negatives. This is nnDetection's
+  (441 grade-supervised and 17 grade-unsupervised instances after D3 rev. 2) plus all 1,075
+  benign/GGG1 negatives. This is nnDetection's
   existing anchor objectness + box regression + segmentation path, unchanged, using its existing
   sigmoid focal loss (background imbalance is what focal loss exists for — do not use CE here).
 - **A separate 4-logit grade head** over each matched positive detection, trained with
@@ -252,6 +253,39 @@ license to skip the pilot.
   remain live. `docs/DATASCI17-THESIS-MASTERFILE.md` is known-stale (a newer version is pending)
   and is not used as a source of truth for any decision above.
 
+## Amendments — rev. 2 (2026-09-13)
+
+### D3 correction — homogeneous csPCa grades recover without component linkage
+
+D3's original requirement of exactly one marksheet lesion and exactly one connected component was
+a sufficient condition for unambiguity, incorrectly treated as necessary. PI-CAI defines Pooch25
+voxel `1` as ISUP >=2 and leaves ISUP <=1 as background. The read-only audit confirmed this on all
+65 cases with one valid GGG2--5 entry plus ISUP 0/1 entries: component counts align with the valid
+entry (60 unfragmented, five fragmented), not with all marksheet entries.
+
+For each Pooch25 case, let `V` be raw `lesion_ISUP` entries restricted to `{2,3,4,5}`. If `V` is
+non-empty and `len(set(V)) == 1`, every csPCa component receives that one grade. This neither
+links marksheet entries to components nor chooses a largest component; it is invariant to mask or
+crop fragmentation. Cases with distinct values in `V`, or no valid value, remain unsupervised.
+
+The corrected audit recovered 192 homogeneous Pooch25 cases (210 raw-mask components) and left
+13 heterogeneous cases / 17 components latent. After the retained-task crop exclusion, exact grade
+supervision is **441 lesions**: GGG2 253, GGG3 104, GGG4 37, GGG5 47; 17 positive instances remain
+grade-unsupervised. The latent cases are `10008_1000008`, `10029_1000029`, `10044_1000044`,
+`10170_1000173`, `10433_1000441`, `10501_1000510`, `10636_1000652`, `10710_1000726`,
+`10909_1000926`, `11239_1001262`, `11245_1001268`, `11352_1001375`, and `11437_1001461`.
+
+### D8 closure — retain the 4-class primary endpoint
+
+The 4-class GGG2--5 endpoint remains primary. GGG4/GGG5 support improved to 37/47 but remains
+too small to resolve rare-grade uncertainty; report per-grade confidence intervals and retain
+GGG4+5 as a pre-registered secondary analysis. No weak bag loss or latent component assignment is
+used for the 13 heterogeneous cases.
+
+The label-only correction was backed up before writing, propagated across every metadata store, and
+cross-store verified; the image-array size/mtime fingerprint was unchanged. The instance used
+`/workspace/gcalf-venv`, not the local `gcalf:m0` container, a recorded D9 deviation.
+
 ## Consequences
 
 - `gcalf_data/build_labels.py`, `gcalf_data/prepare_picai.py`, `gcalf_data/sanity_checks.py`, and
@@ -264,7 +298,7 @@ license to skip the pilot.
   references to adapt).
 - FDSF and WAF are also new code (D4); the integration surface is larger than ADR 0001 assumed.
 - Every downstream evaluation artifact (confusion matrix, FROC, Grad-CAM target) must report the
-  detection denominator (1,499 retained cases) and the grade-matched denominator (340 lesions)
+  detection denominator (1,499 retained cases) and the grade-matched denominator (441 lesions)
   side by side, never collapse them into one accuracy number.
 
 ## Rejected Alternatives

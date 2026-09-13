@@ -540,10 +540,10 @@ unchanged by this document.
 | Risk | Likelihood | Fallback |
 |---|---|---|
 | FDSF/WAF build takes longer than budgeted | High | This is the largest new-code item in the plan (§0); if it slips past its phase gate, step down the budget ladder rather than compressing later phases. |
-| Grade head does not learn on 220–340 lesions | Medium | Widen with the D3 unifocal-recovery audit before concluding the head is broken; report per-grade CIs regardless. |
+| Grade head does not learn on 441 exact lesions | Medium | D3 rev. 2 recovered homogeneous Pooch25 grades; report per-grade CIs regardless. |
 | `nnDetection csrc`/old-torch env won't build | High | Docker image with the exact pinned base; CPU fallback for NMS in smoke tests; this is the #1 environment blocker historically. |
 | GPU memory (3D + attention) | High | Smaller shared CAF/WAF windows, activation checkpointing, a predeclared fusion-level subset shared by both modules, batch 1 + accumulation, AMP everywhere except FFT. |
-| GGG4/5 tiny even after D3 audit | Certain (floor is 20/18) | Report CIs; consider the pre-registered GGG4+5 merged secondary analysis (ADR 0002 D8) once audit counts are known. |
+| GGG4/5 remain small after D3 rev. 2 | Certain (37/47 exact lesions) | Report CIs and retain GGG4+5 as a secondary analysis; the 4-class endpoint remains primary (ADR 0002 D8). |
 | Full 20-run matrix over budget | Med | Pre-committed ladder (§9); never drop folds for only some configs. |
 
 ---

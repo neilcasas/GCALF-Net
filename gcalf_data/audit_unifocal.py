@@ -1,12 +1,11 @@
-"""PI-CAI unifocal linkage recovery audit (PHASE_1_data_pipeline.md Sec 1.1).
+"""PI-CAI Pooch25 grade-linkage recovery audit (PHASE_1_data_pipeline.md Sec 1.1).
 
-For every Pooch25 (binary, ungraded) case, compares the number of connected
-components in its lesion mask to the number of comma-separated entries in
-that case's marksheet lesion_ISUP field. A case is recoverable only when both
-counts are exactly 1 -- the single component's grade is then that lesion's
-lesion_ISUP value, unambiguously. Any other case (multiple components, or
-multiple marksheet lesions) is left ungraded: this script never infers,
-pools, or splits grades across components.
+For every Pooch25 (binary, ungraded) case, retain its raw marksheet
+``lesion_ISUP`` entries for provenance and restrict them to GGG2--5. A case
+is recoverable when it has at least one valid entry and every valid entry has
+the same grade. That grade applies to every csPCa component without assigning
+marksheet lesions to components. Cases with distinct valid grades, or no
+valid grade, remain grade-unsupervised.
 """
 
 import argparse
@@ -29,6 +28,19 @@ def marksheet_lesion_entries(marksheet_path: Path) -> Dict[str, List[str]]:
     return entries
 
 
+def valid_lesion_grades(lesion_entries: List[str]) -> List[int]:
+    """Return the GGG2--5 entries, discarding GGG0/1 and non-integer values."""
+    valid_grades = []
+    for entry in lesion_entries:
+        try:
+            grade = int(entry)
+        except ValueError:
+            continue
+        if grade in VALID_GRADES:
+            valid_grades.append(grade)
+    return valid_grades
+
+
 def count_mask_components(mask_path: Path) -> int:
     try:
         import numpy as np
@@ -49,18 +61,25 @@ def count_mask_components(mask_path: Path) -> int:
 def audit_case(case_id: str, mask_path: Path, lesion_entries: List[str]) -> Dict[str, object]:
     num_components = count_mask_components(mask_path)
     num_lesions = len(lesion_entries)
+    valid_grades = valid_lesion_grades(lesion_entries)
     grade: Optional[int] = None
     grade_source: Optional[str] = None
-    grade_supervised = num_components == 1 and num_lesions == 1
+    if not valid_grades:
+        audit_reason = "no_valid_grade"
+    elif len(set(valid_grades)) > 1:
+        audit_reason = "heterogeneous"
+    else:
+        audit_reason = "homogeneous"
+    grade_supervised = audit_reason == "homogeneous"
     if grade_supervised:
-        grade = int(lesion_entries[0])
-        if grade not in VALID_GRADES:
-            raise ValueError(f"{case_id}: recovered grade {grade} is outside GGG2-5")
+        grade = valid_grades[0]
         grade_source = "audit_unifocal"
     return {
         "case_id": case_id,
         "num_components": num_components,
         "num_marksheet_lesions": num_lesions,
+        "valid_grades": valid_grades,
+        "audit_reason": audit_reason,
         "grade_supervised": grade_supervised,
         "grade": grade,
         "grade_source": grade_source,
@@ -82,16 +101,19 @@ def run_audit(pooch25_dir: Path, marksheet_path: Path) -> Dict[str, Dict[str, ob
     return results
 
 
-def summarize(results: Dict[str, Dict[str, object]]) -> Tuple[Counter, int]:
-    """Return (recovered-grade counts, count of cases left ungraded)."""
+def summarize(results: Dict[str, Dict[str, object]]) -> Tuple[Counter, int, int]:
+    """Return recovered lesion counts, ungraded cases, and ambiguous cases."""
     recovered = Counter()
     not_recovered = 0
+    ambiguous = 0
     for result in results.values():
         if result["grade_supervised"]:
-            recovered[result["grade"]] += 1
+            recovered[result["grade"]] += result["num_components"]
         else:
             not_recovered += 1
-    return recovered, not_recovered
+            if result["audit_reason"] == "heterogeneous":
+                ambiguous += 1
+    return recovered, not_recovered, ambiguous
 
 
 def main() -> None:
@@ -108,10 +130,11 @@ def main() -> None:
     with args.output_json.open("w") as file:
         json.dump(results, file, indent=2, sort_keys=True)
 
-    recovered, not_recovered = summarize(results)
+    recovered, not_recovered, ambiguous = summarize(results)
     print(f"Audited {len(results)} Pooch25 cases.")
     print("Recovered grade-supervised counts:", {f"GGG{g}": c for g, c in sorted(recovered.items())})
     print(f"Recovered: {sum(recovered.values())} / {len(results)}; left ungraded: {not_recovered}")
+    print(f"Genuinely ambiguous cases left ungraded: {ambiguous}")
 
 
 if __name__ == "__main__":
