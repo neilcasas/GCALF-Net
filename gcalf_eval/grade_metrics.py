@@ -18,8 +18,11 @@ def _iou(box, boxes):
     return intersection / np.maximum(box_volume + boxes_volume - intersection, 1e-8)
 
 
-def lesion_instances(label_path):
-    """Load lesion boxes in nnDetection's native array-axis pair order.
+def _load_instances(label_path):
+    """Parse a label volume's lesion instances: ids, boxes (nnDetection's native
+    array-axis pair order -- see `lesion_instances`), grades, grade-supervision
+    flags, and the raw instance-id label image, all in one read so every caller
+    (grade and segmentation metrics alike) agrees on instance order and identity.
 
     SimpleITK exposes volumes as ``z, y, x`` arrays.  nnDetection's box
     transforms retain that spatial-axis order and pack it as
@@ -32,7 +35,7 @@ def lesion_instances(label_path):
         metadata = json.load(file)
     labels = sitk.GetArrayFromImage(sitk.ReadImage(str(label_path)))
     boxes, grades, supervised_flags = [], [], []
-    instance_ids = metadata.get("instances", {}).keys()
+    instance_ids = list(metadata.get("instances", {}).keys())
     if set(instance_ids) != set(metadata.get("grade_supervised", {})):
         raise ValueError(f"{label_path}: grade supervision metadata does not cover every instance")
     for instance_id in instance_ids:
@@ -45,10 +48,58 @@ def lesion_instances(label_path):
         grades.append(int(metadata["grades"][instance_id]) if supervised else -1)
         supervised_flags.append(supervised)
     return (
+        [int(instance_id) for instance_id in instance_ids],
         np.asarray(boxes, dtype=np.float32).reshape(-1, 6),
         np.asarray(grades, dtype=np.int64),
         np.asarray(supervised_flags, dtype=bool),
+        labels,
     )
+
+
+def lesion_instances(label_path):
+    """Load lesion boxes in nnDetection's native array-axis pair order.
+
+    SimpleITK exposes volumes as ``z, y, x`` arrays.  nnDetection's box
+    transforms retain that spatial-axis order and pack it as
+    ``axis0_low, axis1_low, axis0_high, axis1_high, axis2_low, axis2_high``.
+    Do not reverse it to physical ``x, y, z`` order: restored predictions use
+    this native order too.
+    """
+    _, boxes, grades, supervised_flags, _ = _load_instances(label_path)
+    return boxes, grades, supervised_flags
+
+
+def _greedy_match_boxes(pred_boxes, pred_scores, gt_boxes, iou_threshold):
+    """Greedy, score-ordered IoU matching of predictions to ground-truth boxes.
+
+    Each ground-truth box is claimed by at most one prediction (its
+    highest-scoring sufficient-IoU match, processed score-descending); each
+    prediction claims at most one ground-truth box. Shared by the grade and
+    segmentation endpoints so "matched positive detection" means identically
+    the same thing for both.
+
+    Returns:
+        matched_gt_index: for each prediction, in its ORIGINAL (unsorted)
+            order, the index into `gt_boxes` it matched, or -1 if it matched
+            none (a false positive).
+        matched_gt_mask: boolean mask over `gt_boxes`, True where a
+            ground-truth box was claimed by some prediction (misses are
+            `~matched_gt_mask`).
+    """
+    matched_gt_mask = np.zeros(len(gt_boxes), dtype=bool)
+    matched_gt_index = np.full(len(pred_boxes), -1, dtype=np.int64)
+    for index in np.argsort(-pred_scores):
+        available = np.flatnonzero(~matched_gt_mask)
+        if not len(available):
+            continue
+        overlaps = _iou(pred_boxes[index], gt_boxes[available])
+        best = int(overlaps.argmax())
+        if overlaps[best] < iou_threshold:
+            continue
+        target_index = available[best]
+        matched_gt_mask[target_index] = True
+        matched_gt_index[index] = target_index
+    return matched_gt_index, matched_gt_mask
 
 
 def supervised_instances(label_path):
@@ -90,22 +141,15 @@ def match_grade_predictions(pred_boxes, pred_scores, pred_grade_probs, gt_boxes,
     if len(gt_supervised) != len(gt_boxes):
         raise ValueError("Ground-truth supervision flags must align one-to-one with boxes")
 
-    matched = np.zeros(len(gt_boxes), dtype=bool)
+    matched_gt_index, matched = _greedy_match_boxes(pred_boxes, pred_scores, gt_boxes, iou_threshold)
+
     true_grades, predicted_grades, matched_probabilities = [], [], []
     false_positives = 0
     matched_ungraded = 0
-    for index in np.argsort(-pred_scores):
-        available = np.flatnonzero(~matched)
-        if not len(available):
+    for index, target_index in enumerate(matched_gt_index):
+        if target_index < 0:
             false_positives += 1
             continue
-        overlaps = _iou(pred_boxes[index], gt_boxes[available])
-        best = int(overlaps.argmax())
-        if overlaps[best] < iou_threshold:
-            false_positives += 1
-            continue
-        target_index = available[best]
-        matched[target_index] = True
         if gt_supervised[target_index]:
             true_grades.append(int(gt_grades[target_index]))
             predicted_grades.append(int(pred_grade_probs[index].argmax()) + 2)

@@ -178,7 +178,7 @@ class PerCaseSegmentationEvaluator(AbstractEvaluator):
                 `seg_dice`: global dice over all classes
         """
         dice_full = np.concatenate(self.results, axis=0)
-        dice_per_class = dice_full.mean(axies=0) # C
+        dice_per_class = dice_full.mean(axis=0) # C
         dice = dice_full.mean() # 1
         
         results = {}

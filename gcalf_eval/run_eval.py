@@ -14,6 +14,7 @@ from picai_eval import evaluate
 from scipy import ndimage
 
 from gcalf_eval.grade_metrics import lesion_instances, match_grade_predictions, summarize_grade_matches
+from gcalf_eval.seg_metrics import match_and_score_segmentation, summarize_segmentation_matches
 from nndet.io.load import load_pickle
 from nndet.io.paths import get_task, get_training_dir
 
@@ -44,6 +45,13 @@ METRIC_FIELDS = (
     "grade_negative_log_likelihood",
     "grade_expected_calibration_error",
     "grade_mean_confidence",
+    "seg_status",
+    "seg_lesion_mean_dice",
+    "seg_matched_detections",
+    "seg_missed_lesions",
+    "seg_false_positives",
+    "seg_false_positives_per_case",
+    "seg_score_threshold",
 )
 
 
@@ -163,6 +171,7 @@ def run_evaluation(
     split: str,
     grade_score_threshold: float = 0.0,
     detection_score_threshold: float = 0.0,
+    seg_score_threshold: float = 0.0,
 ) -> Dict[str, object]:
     """Evaluate exactly the requested cases and persist the M3 metric artifacts."""
     prediction_dir = Path(prediction_dir)
@@ -185,6 +194,15 @@ def run_evaluation(
     grade_true, grade_predicted, grade_probabilities = [], [], []
     grade_misses = grade_false_positives = grade_matched_ungraded = 0
     has_grade_predictions = True
+    # Segmentation predictions are a separate file per case (`{case_id}_seg.pkl`,
+    # written only when inference ran with `inference_kwargs.do_seg=true` --
+    # scripts/predict.py's `--seg_only` flag is currently unwired and has no
+    # effect). Presence is checked once, on the first case, and then required
+    # to hold for every case: a partial set would silently score whichever
+    # cases happen to have it.
+    has_seg_predictions = (prediction_dir / f"{expected_case_ids[0]}_seg.pkl").is_file()
+    seg_lesion_dice = []
+    seg_matched = seg_missed = seg_false_positives = 0
     for case_id in expected_case_ids:
         prediction = load_pickle(prediction_dir / f"{case_id}_boxes.pkl")
         detection_map = boxes_to_detection_map(
@@ -212,6 +230,22 @@ def run_evaluation(
             grade_misses += misses
             grade_false_positives += false_positives
             grade_matched_ungraded += matched_ungraded
+
+        if has_seg_predictions:
+            seg_path = prediction_dir / f"{case_id}_seg.pkl"
+            if not seg_path.is_file():
+                raise ValueError(
+                    f"{case_id}: segmentation prediction is present for some cases but missing for this one"
+                )
+            predicted_seg = load_pickle(seg_path)["pred_seg"]
+            lesion_dice, matched, missed, false_positives = match_and_score_segmentation(
+                prediction["pred_boxes"], prediction["pred_scores"], predicted_seg,
+                ground_truth_dir / f"{case_id}.nii.gz", score_threshold=seg_score_threshold,
+            )
+            seg_lesion_dice.extend(lesion_dice)
+            seg_matched += matched
+            seg_missed += missed
+            seg_false_positives += false_positives
 
     has_positive = any(mask.any() for mask in ground_truth_masks)
     has_negative = any(not mask.any() for mask in ground_truth_masks)
@@ -243,6 +277,15 @@ def run_evaluation(
             num_cases=len(expected_case_ids), score_threshold=grade_score_threshold,
             matched_probabilities=grade_probabilities,
         ))
+    if has_seg_predictions:
+        row.update(summarize_segmentation_matches(
+            seg_lesion_dice, seg_matched, seg_missed, seg_false_positives,
+            num_cases=len(expected_case_ids), score_threshold=seg_score_threshold,
+        ))
+    else:
+        # PHASE_6_evaluation.md Sec 6.3: state out-of-scope explicitly rather
+        # than silently omitting the columns.
+        row["seg_status"] = "out_of_scope_segmentation_head_not_trained"
     if not all(math.isfinite(float(row[field])) for field in ("picai_score", "auroc", "lesion_ap")):
         raise ValueError(f"PI-CAI metrics are not finite: {row}")
 
@@ -250,6 +293,9 @@ def run_evaluation(
     if has_grade_predictions:
         with (output_dir / "grade_metrics.json").open("w") as file:
             json.dump({key: value for key, value in row.items() if key.startswith("grade_")}, file, indent=2)
+    if has_seg_predictions:
+        with (output_dir / "seg_metrics.json").open("w") as file:
+            json.dump({key: value for key, value in row.items() if key.startswith("seg_")}, file, indent=2)
     with (output_dir / "metrics.csv").open("w", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=METRIC_FIELDS)
         writer.writeheader()
@@ -303,6 +349,12 @@ def main() -> None:
              "(default: 0.0, i.e. no threshold). Distinct from --grade-score-threshold, which "
              "only gates grade matching and has no effect on lesion_ap.",
     )
+    parser.add_argument(
+        "--seg-score-threshold", type=float, default=0.0,
+        help="Drop segmentation-matching predictions scoring below this before matching "
+             "(default: 0.0, i.e. no threshold). Distinct from --grade-score-threshold and "
+             "--detection-score-threshold, which have no effect on segmentation Dice.",
+    )
     args = parser.parse_args()
 
     direct_paths = (args.prediction_dir, args.ground_truth_dir, args.case_ids_file)
@@ -332,6 +384,7 @@ def main() -> None:
         split=args.split,
         grade_score_threshold=args.grade_score_threshold,
         detection_score_threshold=args.detection_score_threshold,
+        seg_score_threshold=args.seg_score_threshold,
     )
     print(row)
 
