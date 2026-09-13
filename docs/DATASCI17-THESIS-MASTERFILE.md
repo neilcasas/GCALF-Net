@@ -615,7 +615,9 @@ This geometry is the raw nnDetection task input rather than the array presented 
 
 ## 3. **Research Analysis** 
 
-During the analysis phase, the structure and composition of the PI-CAI source dataset were examined to inform both the preprocessing strategy and the experimental evaluation protocol. The source dataset consists of 1,500 cases, of which 425 are csPCa-positive (ISUP ≥ 2) and 1,075 are benign or indolent, and 776 ISUP-annotated lesions. The retained study task excludes `11050_1001070`, leaving 1,499 cases, 424 positives, and 340 grade-supervised lesions. ISUP 1 lesions are not a grading class: under PI-CAI's csPCa reference standard they are background, so the grading endpoint is GGG2–5. Grade metrics report their matched grade-supervised denominator separately from the 1,499-case detection denominator.
+During the analysis phase, the structure and composition of the PI-CAI source dataset were examined to inform both the preprocessing strategy and the experimental evaluation protocol. The source dataset consists of 1,500 cases, of which 425 are csPCa-positive (ISUP ≥ 2) and 1,075 are benign or indolent, and 776 ISUP-annotated lesions. The retained study task excludes `11050_1001070`, leaving 1,499 cases, 424 positives, and 441 grade-supervised lesions (GGG2 253, GGG3 104, GGG4 37, GGG5 47). ISUP 1 lesions are not a grading class: under PI-CAI's csPCa reference standard they are background, so the grading endpoint is GGG2–5. Grade metrics report their matched grade-supervised denominator separately from the 1,499-case detection denominator.
+
+The D3 linkage audit assigns a Pooch25 component a grade only when every recorded csPCa-valid marksheet entry is identical; it neither matches entries to components nor selects a largest component. Thirteen cases contain distinct valid grades and therefore remain detection-positive but grade-unsupervised: `10008_1000008`, `10029_1000029`, `10044_1000044`, `10170_1000173`, `10433_1000441`, `10501_1000510`, `10636_1000652`, `10710_1000726`, `10909_1000926`, `11239_1001262`, `11245_1001268`, `11352_1001375`, and `11437_1001461`. This is a named limitation; no weak bag loss or latent component assignment is used to fabricate their grades.
 
 To address this imbalance, stratified random sampling is implemented at the patient level to ensure proportional representation of each Gleason Grade Group across all cross-validation folds. Patient-level sampling, rather than lesion or slice-level sampling, is used to prevent data leakage, which may occur if multiple slices from the same patient appear in both training and evaluation partitions, thereby artificially inflating performance estimates. The dataset is divided into five folds for cross-validation, with every patient case serving as a test case exactly once across the five iterations. 
 
@@ -681,7 +683,7 @@ architectural design decisions, evaluation framework, and overall scientific rig
 
 ## **d. Data Source** 
 
-The source dataset is the 1,500-case PI-CAI public training and development cohort. The study cohort is the retained 1,499-case task after exclusion of source case `11050_1001070`: 424 cases are csPCa-positive, and 340 lesions carry grade supervision. It comprises T2W, ADC, and HBV bpMRI with a csPCa reference standard. Only grade-resolved lesion annotations support the separate GGG2–5 grade loss; binary-only positive masks are not assigned fabricated grades.
+The source dataset is the 1,500-case PI-CAI public training and development cohort. The study cohort is the retained 1,499-case task after exclusion of source case `11050_1001070`: 424 cases are csPCa-positive, and 441 lesions carry exact grade supervision. It comprises T2W, ADC, and HBV bpMRI with a csPCa reference standard. Only grade-resolved lesion annotations support the separate GGG2–5 grade loss; heterogeneous binary-only cases are not assigned fabricated grades.
 
 ## **E. Sampling and Data Gathering Procedure** 
 

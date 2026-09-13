@@ -13,7 +13,7 @@ not passed. See `docs/adr/0002-*.md` for why each milestone is shaped this way.
 | M | Milestone | Phase | Goal | Gates |
 |---|---|---|---|---|
 | M0 | Environment | [0](phases/PHASE_0_environment.md) | `nndet`, PI-CAI tools, medcam all import; CUDA build verified | L, V |
-| M1 | Data pipeline | [1](phases/PHASE_1_data_pipeline.md) | Validated retained task: `csPCa` detection class, 1,499 retained cases (one source exclusion), and grade metadata (340 audited lesions) | L |
+| M1 | Data pipeline | [1](phases/PHASE_1_data_pipeline.md) | Validated retained task: `csPCa` detection class, 1,499 retained cases (one source exclusion), and grade metadata (441 exact lesions) | L |
 | M2 | Baseline build (FDSF + WAF) | [2](phases/PHASE_2_baseline.md) | Input-level FDSF built; WAF wired across the five-level encoder; `fusion_levels` profiled and frozen | L, V |
 | M3 | Baseline forward + overfit | [2](phases/PHASE_2_baseline.md) | Grade head loss routing correct; 2-case overfit drives loss to ~0 | L, V |
 | M4 ⭐ | Baseline full train | [2](phases/PHASE_2_baseline.md) | Real FDSF+WAF baseline numbers on PI-CAI — thesis's first result | V |
@@ -59,8 +59,9 @@ Pooch25 cases. Official 5-fold splits loaded and independently verified.
 `gcalf_data.audit_crop_retention.py` records every source mask's stage-wise retention and removes
 fully lost source-positive cases from every fold before conversion; it excluded `11050_1001070`
 (silently retained as an empty-label case after losing its lesion under the old rule), leaving
-**1,499 retained cases / 424 positives**, of which **340 carry grade supervision** (118
-grade-unsupervised). The clean rebuild, planner run, and re-audit report ran on 2026-09-07
+**1,499 retained cases / 424 positives**, of which **441 carry grade supervision** (17
+grade-unsupervised). D3 rev. 2 recovered homogeneous Pooch25 grades without component linkage and
+left 13 heterogeneous cases latent. The clean rebuild, planner run, and re-audit report ran on 2026-09-07
 (`evidence/m1/data-report-five-level-20260907.md`, `continuation-crop-retention.log`,
 `replan-five-level-20260907.log`); the generated report itself is not committed per
 `docs/data_report.md`'s own policy (it carries cohort-derived experiment evidence) — rerun

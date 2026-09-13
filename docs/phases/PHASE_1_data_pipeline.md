@@ -29,14 +29,16 @@ remain as an empty-label benign case in any fold.
 
 Before building the full task, run a connected-component audit over all 425 positive masks:
 
-1. For every case with a `Pooch25` (binary) mask: count connected components in the mask, and
-   count comma-separated entries in that case's `marksheet.csv` `lesion_ISUP` field.
-2. **If both counts are exactly 1**, the single component's grade is that lesion's `lesion_ISUP`
-   value, unambiguously — record it as `grade_supervised: true`, `grade_source: "audit_unifocal"`.
-3. **Any other case (multiple components, or multiple marksheet lesions) is left untouched** —
-   `grade_supervised: false`. Do not infer, pool, or split grades across components.
-4. Report the recovered count per grade (starting floor: GGG2 135, GGG3 52, GGG4 20, GGG5 18 from
-   `human_expert/original` alone) in `docs/data_report.md`.
+1. For every `Pooch25` mask, retain comma-separated `lesion_ISUP` entries for provenance, then
+   restrict them to valid GGG2--5 values. Count components only for audit evidence; cardinality
+   must not decide a grade.
+2. **If valid entries are non-empty and all identical**, assign that grade to every csPCa component:
+   `grade_supervised: true`, `grade_source: "audit_unifocal"`. Pooch25 masks delineate csPCa only,
+   so ISUP 0/1 entries are background noise for this purpose.
+3. **Cases with distinct valid grades, or no valid grade, stay untouched** —
+   `grade_supervised: false`. Do not infer, pool, split, or choose a largest component.
+4. D3 rev. 2 recovered 441 exact retained-task lesions: GGG2 253, GGG3 104, GGG4 37, GGG5 47.
+   Thirteen heterogeneous Pooch25 cases remain latent and are a named thesis limitation.
 
 This audit requires SimpleITK/numpy connected-component labeling (`scipy.ndimage.label` or
 `SimpleITK.ConnectedComponent`), unavailable in a bare-Python read-only pass — run it inside
@@ -158,14 +160,14 @@ preprocessing to rescue a case.
 
 ## 1.4 Cohort limitations (record in the generated data report, not silently)
 
-- Grade supervision covers 220 baseline + audit-recovered lesions out of the retained positive
-  cohort — never the full detection-training cohort. State this explicitly wherever weighted F1 or
+- Grade supervision covers 441 of 458 retained positive instances, never the full detection cohort.
+  State the grade-matched and 1,499-case detection denominators together wherever weighted F1 or
   the confusion matrix is reported.
-- GGG4 (20) and GGG5 (18) are small even before folding — roughly 4 held-out cases per fold each
-  at the baseline floor. Report per-grade counts and bootstrap CIs everywhere (Phase 6).
-- The multi-component, multi-lesion Pooch25 cases that the audit could not resolve remain
-  detection-positive but grade-unsupervised. Do not revisit this rule under schedule pressure —
-  it is the boundary between recovered-and-defensible and inferred-and-not.
+- GGG4 (37) and GGG5 (47) remain small after recovery. Report per-grade counts and bootstrap CIs;
+  retain GGG4+5 as a secondary analysis, not the primary endpoint (ADR 0002 D8 rev. 2).
+- Thirteen heterogeneous Pooch25 cases (17 components) remain detection-positive but
+  grade-unsupervised because their valid marksheet grades differ. Do not revisit this boundary
+  under schedule pressure — it is the boundary between recovered-and-defensible and inferred-and-not.
 - A prostate-centred crop can expose gland/lesion provenance disagreements; it cannot defensibly
   resolve them using the target mask. Report repairs and exclusions, including their fold, before
   training and apply the same frozen case set to all four ablation arms.

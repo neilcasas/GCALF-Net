@@ -49,6 +49,26 @@ def test_inject_grade_metadata_uses_audit_result_for_pooch25_instance(tmp_path):
     assert ungraded == 0
 
 
+def test_inject_grade_metadata_preserves_human_expert_grade_after_detection_class_collapse(tmp_path):
+    labels_dir = tmp_path / "labelsTr"
+    _write_case_json(labels_dir, "10000_1000000", {"1": 0})
+    label_path = labels_dir / "10000_1000000.json"
+    metadata = json.loads(label_path.read_text())
+    metadata.update(
+        {"grades": {"1": 3}, "grade_sources": {"1": "human_expert_mask"}, "grade_supervised": {"1": True}}
+    )
+    label_path.write_text(json.dumps(metadata))
+
+    grade_counts, ungraded = inject_grade_metadata(labels_dir, audit_results={})
+
+    metadata = json.loads(label_path.read_text())
+    assert metadata["grades"] == {"1": 3}
+    assert metadata["grade_sources"] == {"1": "human_expert_mask"}
+    assert metadata["grade_supervised"] == {"1": True}
+    assert grade_counts == {3: 1}
+    assert ungraded == 0
+
+
 def test_inject_grade_metadata_leaves_unrecovered_pooch25_instance_ungraded(tmp_path):
     labels_dir = tmp_path / "labelsTr"
     _write_case_json(labels_dir, "10008_1000008", {"1": 0})

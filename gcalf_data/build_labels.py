@@ -46,7 +46,12 @@ def marksheet_summary(marksheet_path: Path) -> Dict[str, Counter]:
 
 
 def _grade_for_instance(
-    case_id: str, raw_class: int, audit_results: Dict[str, dict]
+    case_id: str,
+    instance_id: str,
+    raw_class: int,
+    audit_results: Dict[str, dict],
+    existing_grades: Dict[str, int],
+    existing_grade_sources: Dict[str, str],
 ) -> Tuple[Optional[int], Optional[str]]:
     """Return (grade, grade_source) for one instance, or (None, None) if it
     stays grade-unsupervised."""
@@ -56,6 +61,11 @@ def _grade_for_instance(
         audit = audit_results.get(case_id)
         if audit and audit.get("grade_supervised"):
             return int(audit["grade"]), "audit_unifocal"
+        if case_id not in audit_results:
+            existing_grade = existing_grades.get(instance_id)
+            existing_source = existing_grade_sources.get(instance_id)
+            if existing_grade in VALID_GRADES and existing_source == "human_expert_mask":
+                return existing_grade, existing_source
         return None, None
     raise ValueError(f"{case_id}: unexpected raw instance class {raw_class}")
 
@@ -78,13 +88,22 @@ def inject_grade_metadata(labels_dir: Path, audit_results: Dict[str, dict]) -> T
         with json_path.open() as file:
             metadata = json.load(file)
         instances = metadata["instances"]
+        existing_grades = metadata.get("grades", {})
+        existing_grade_sources = metadata.get("grade_sources", {})
 
         new_instances: Dict[str, int] = {}
         grades: Dict[str, int] = {}
         grade_sources: Dict[str, str] = {}
         grade_supervised: Dict[str, bool] = {}
         for instance_id, raw_class in instances.items():
-            grade, grade_source = _grade_for_instance(case_id, int(raw_class), audit_results)
+            grade, grade_source = _grade_for_instance(
+                case_id,
+                instance_id,
+                int(raw_class),
+                audit_results,
+                existing_grades,
+                existing_grade_sources,
+            )
             new_instances[instance_id] = 0
             if grade is not None:
                 grades[instance_id] = grade
