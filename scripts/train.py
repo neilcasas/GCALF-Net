@@ -93,6 +93,9 @@ def sweep():
                         help="Checkpoint identifier, e.g. last, best, or model_best_grade")
     parser.add_argument('--output-dir', type=Path,
                         help="Write sweep/predictions here instead of the training directory")
+    parser.add_argument('--num-tta-transforms', type=int, default=None,
+                        help="Number of TTA transforms (default: get_predictor's default, "
+                             "8 for 3D). Pass 1 for a fast, TTA-free diagnostic sweep.")
     args = parser.parse_args()
     task = args.task
     model = args.model
@@ -103,6 +106,7 @@ def sweep():
         fold=fold,
         checkpoint=args.checkpoint,
         output_dir=args.output_dir,
+        num_tta_transforms=args.num_tta_transforms,
         )
 
 
@@ -391,6 +395,7 @@ def _sweep(
     fold: int,
     checkpoint: str = "last",
     output_dir: Path = None,
+    num_tta_transforms: int = None,
     ):
     """
     Determine best postprocessing parameters for a trained model
@@ -400,6 +405,8 @@ def _sweep(
         model: full name of the model run determine empricial parameters for
             e.g. RetinaUNetV001_D3V001_3d
         fold: current fold
+        num_tta_transforms: number of tta transforms; None uses
+            get_predictor's default (8 for 3D)
     """
     nndet_data_dir = Path(os.getenv("det_models"))
     task = get_task(task, name=True, models=True)
@@ -440,6 +447,7 @@ def _sweep(
         train_data_dir=data_dir,
         case_ids=case_ids,
         run_prediction=True, # TODO: add commmand line arg
+        num_tta_transforms=num_tta_transforms,
     )
 
     plan["inference_plan"] = inference_plan

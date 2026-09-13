@@ -21,7 +21,7 @@ import copy
 from collections import Counter, defaultdict
 from pathlib import Path
 from functools import partial
-from typing import Callable, Hashable, Sequence, Dict, Any, Type
+from typing import Callable, Hashable, Sequence, Dict, Any, Type, Optional
 
 import torch
 import numpy as np
@@ -890,6 +890,7 @@ class RetinaUNetModule(LightningBaseModuleSWA):
               case_ids: Sequence[str],
               run_prediction: bool = True,
               source_models: os.PathLike = None,
+              num_tta_transforms: Optional[int] = None,
               **kwargs,
               ) -> Dict[str, Any]:
         """
@@ -902,6 +903,9 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                 data is located
             case_ids: case identifies to prepare and predict
             run_prediction: predict cases
+            num_tta_transforms: number of tta transforms; None uses
+                get_predictor's default (8 for 3D). Pass 1 for a fast,
+                TTA-free diagnostic sweep.
             **kwargs: keyword arguments passed to predict function
 
         Returns:
@@ -932,7 +936,7 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                 plan=self.plan,
                 source_models=source_models or save_dir,
                 num_models=1,
-                num_tta_transforms=None,
+                num_tta_transforms=num_tta_transforms,
                 case_ids=case_ids,
                 save_state=True,
                 model_fn=get_loader_fn(mode=self.trainer_cfg.get("sweep_ckpt", "last")),
