@@ -375,22 +375,25 @@ def _train(
             train_data_dir=data_dir,
             case_ids=case_ids,
             run_prediction=True,
+            **cfg.get("inference_kwargs", {}),
         )
 
         plan["inference_plan"] = inference_plan
         save_pickle(plan, train_dir / "plan_inference.pkl")
 
-        ensembler_cls = module.get_ensembler_cls(
-            key="boxes", dim=plan["network_dim"]) # TODO: make this configurable    
+        ensembler_clss = [module.get_ensembler_cls(key="boxes", dim=plan["network_dim"])]
+        if cfg.get("inference_kwargs", {}).get("do_seg", False):
+            ensembler_clss.append(module.get_ensembler_cls(key="seg", dim=plan["network_dim"]))
         for restore in [True, False]:
             target_dir = train_dir / "val_predictions" if restore else \
                 train_dir / "val_predictions_preprocessed"
-            extract_results(source_dir=train_dir / "sweep_predictions",
-                            target_dir=target_dir,
-                            ensembler_cls=ensembler_cls,
-                            restore=restore,
-                            **inference_plan,
-                            )
+            for ensembler_cls in ensembler_clss:
+                extract_results(source_dir=train_dir / "sweep_predictions",
+                                target_dir=target_dir,
+                                ensembler_cls=ensembler_cls,
+                                restore=restore,
+                                **inference_plan,
+                                )
 
         _evaluate(
             task=cfg["task"],
@@ -470,17 +473,19 @@ def _sweep(
     plan["inference_plan"] = inference_plan
     save_pickle(plan, target_dir / "plan_inference.pkl")
 
-    ensembler_cls = module.get_ensembler_cls(
-        key="boxes", dim=plan["network_dim"]) # TODO: make this configurable    
+    ensembler_clss = [module.get_ensembler_cls(key="boxes", dim=plan["network_dim"])]
+    if cfg.get("inference_kwargs", {}).get("do_seg", False):
+        ensembler_clss.append(module.get_ensembler_cls(key="seg", dim=plan["network_dim"]))
     for restore in [True, False]:
         prediction_export_dir = target_dir / "val_predictions" if restore else \
             target_dir / "val_predictions_preprocessed"
-        extract_results(source_dir=target_dir / "sweep_predictions",
-                        target_dir=prediction_export_dir,
-                        ensembler_cls=ensembler_cls,
-                        restore=restore,
-                        **inference_plan,
-                        )
+        for ensembler_cls in ensembler_clss:
+            extract_results(source_dir=target_dir / "sweep_predictions",
+                            target_dir=prediction_export_dir,
+                            ensembler_cls=ensembler_cls,
+                            restore=restore,
+                            **inference_plan,
+                            )
 
     if target_dir == train_dir:
         _evaluate(
