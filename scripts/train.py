@@ -464,6 +464,7 @@ def _sweep(
         case_ids=case_ids,
         run_prediction=True, # TODO: add commmand line arg
         num_tta_transforms=num_tta_transforms,
+        **cfg.get("inference_kwargs", {}),
     )
 
     plan["inference_plan"] = inference_plan
