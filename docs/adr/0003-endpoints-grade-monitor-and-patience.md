@@ -53,6 +53,23 @@ Phase 6 reported number.
    protocol-lock change before any Phase 5 process starts. It remains unset for
    the Phase 4 diagnostic pilot. This ADR does not authorize a matrix launch
    without that value.
+5a. **Protocol lock, decided 2026-09-14: grade-head freezing is DISABLED.**
+   `trainer_cfg.grade_freeze_patience: null` is declared explicitly in
+   `nndet/conf/train/gcalf_baseline.yaml`, which all four arms inherit, so the
+   decision is recorded in the configuration each run resolves from rather than
+   being implied by absence. This satisfies Sec 5's requirement that the value be
+   committed before Phase 5.
+
+   Rationale. The grade head is data-limited, not under-regularized: training
+   cross-entropy reaches only 1.11 against a uniform-prediction value of
+   ln(4)=1.386, and the pre-`d9d1159` 12.83M-parameter head memorized to 0.15
+   while generalizing *worse* (best validation CE 1.137-1.166 versus 1.248-1.273
+   for the current 1.33M head). Freezing a branch that is already near chance has
+   little expected effect on the shared backbone. Leaving it disabled keeps the
+   training protocol byte-identical to the existing `_c2_` fold-0 runs, removing
+   one moving part from a matrix whose primary endpoints are now detection and
+   segmentation. `GradeHeadFreezeCallback` remains in the codebase, tested and
+   unused, available without an ADR change if later evidence warrants it.
 
 ## Statistical Consequences
 

@@ -8,6 +8,10 @@ trainer_cfg:
   # ``model_best_grade`` from patch-level lesion-matched macro recall.
   grade_monitor_key: "val_grade_balanced_accuracy"
   grade_monitor_mode: "max"
+  # Protocol lock (ADR 0003 Sec 5 / Sec 5a): grade-head freezing is DISABLED for
+  # the five-fold matrix.  Declared explicitly rather than left absent so the
+  # decision is recorded in the configuration the runs resolve from.
+  grade_freeze_patience: null
 
 model_cfg:
   encoder_kwargs:
