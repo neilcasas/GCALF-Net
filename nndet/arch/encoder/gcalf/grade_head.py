@@ -50,5 +50,5 @@ def grade_loss_weight(grade_targets, grade_supervised_mask, class_weights):
         return grade_targets.new_zeros((), dtype=torch.float)
     supervised_targets = grade_targets[grade_supervised_mask]
     if class_weights is None:
-        return grade_targets.new_tensor(float(supervised_targets.numel()))
+        return torch.tensor(supervised_targets.numel(), device=grade_targets.device, dtype=torch.float)
     return class_weights[grade_to_index(supervised_targets)].sum()
