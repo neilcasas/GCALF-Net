@@ -56,6 +56,7 @@ trainer_cfg:
   poly_gamma: 0.9
 
   swa_epochs: 10 # number of epochs to run swa with cyclic learning rate
+  swa_update_bn_statistics: true # one final no-backprop pass after SWA weight transfer
   # sweep_ckpt: Select checkpoint identifier for sweeping. Default "last".
 
 model_cfg:

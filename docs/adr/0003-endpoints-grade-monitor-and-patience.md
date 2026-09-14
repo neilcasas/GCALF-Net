@@ -76,3 +76,7 @@ must not be changed after the five-fold results are known.
   train directories rather than resume an old run.
 - Before Phase 5, exercise `gcalf_eval/seg_metrics.py` on real `do_seg=true`
   predictions and pass the four-arm fold-0 diagnostic gate.
+- Full runs recompute BatchNorm running statistics after the ten SWA weight
+  snapshots. This is one no-backprop training-loader pass, not an eleventh SWA
+  optimization epoch. The `swa_epochs: 0` diagnostic pilot registers no SWA
+  callback and therefore has no such pass.

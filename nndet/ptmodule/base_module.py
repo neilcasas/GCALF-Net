@@ -186,6 +186,8 @@ class LightningBaseModuleSWA(LightningBaseModule):
     def configure_callbacks(self):
         from nndet.training.swa import SWACycleLinear
 
+        if not self.trainer_cfg["swa_epochs"]:
+            return []
         callbacks = []
         callbacks.append(
             SWACycleLinear(
@@ -193,6 +195,7 @@ class LightningBaseModuleSWA(LightningBaseModule):
                 cycle_initial_lr=self.trainer_cfg["initial_lr"] / 10.,
                 cycle_final_lr=self.trainer_cfg["initial_lr"] / 1000.,
                 num_iterations_per_epoch=self.trainer_cfg["num_train_batches_per_epoch"],
+                update_statistics=self.trainer_cfg.get("swa_update_bn_statistics", True),
                 )
             )
         return callbacks
