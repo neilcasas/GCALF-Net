@@ -30,10 +30,45 @@ Phase 6 reported number.
 
 ## Decisions
 
-1. Detection (FROC, lesion AUROC, and case-level AUROC over all 1,499 cases) and
-   lesion-matched segmentation Dice are the endpoints answering SOP 1--2. Grade
-   weighted F1 is secondary. Retain ADR 0002 D8's GGG4+5 merged analysis and
-   report grade support, per-grade sensitivity, and uncertainty honestly.
+1. **Superseded 2026-09-14 (Sec 1a).** Grade weighted F1 / balanced accuracy is
+   the primary endpoint, matching the thesis's own stated title and hypothesis
+   (`DATASCI17-THESIS-MASTERFILE.md`: "...for Gleason Grade Group Classification
+   using bpMRI"; the pre-registered hypothesis that LFF+CAF "significantly
+   improves lesion-level GGG2-5 classification performance"). Detection (FROC,
+   lesion AUROC, case-level AUROC) and lesion-matched segmentation Dice are
+   supporting evidence that the shared pipeline trained correctly, not the
+   endpoint SOP 1-2 are decided on. Retain ADR 0002 D8's GGG4+5 merged analysis
+   and report grade support, per-grade sensitivity, and uncertainty honestly.
+   The 4-class GGG2-5 formulation is unchanged; no binary or merged reframing is
+   substituted for the primary result.
+
+1a. **Reversal, decided 2026-09-14.** This ADR's original Sec 1 (below,
+   preserved for the record) re-designated detection and segmentation as
+   primary after the fold-0 arms happened to separate on those two endpoints.
+   That reasoning did not weigh the thesis's own declared research question,
+   which is GGG classification, not detection or segmentation. On review, the
+   original re-designation is reverted; grade is primary again, per the amended
+   Sec 1 above.
+
+   Consequence for Phase 1b (the detection-map painting defect,
+   `boxes_to_detection_map` inverting checkpoint ordering at any single score
+   threshold): it no longer gates a matrix launch. Verified by code trace:
+   `gcalf_eval/grade_metrics.py::match_grade_predictions` and
+   `gcalf_eval/seg_metrics.py::match_and_score_segmentation` both match directly
+   against `pred_boxes`/`pred_scores`/masks and never call
+   `boxes_to_detection_map`. The defect is confined to the PI-CAI aggregate
+   detection map (`lesion_ap`, `auroc`, `picai_score`), now a doubly-secondary
+   figure -- detection is supporting evidence, and nnDetection's internal FROC/
+   mAP (computed every epoch, independent of this path) already serves that
+   role. Resolve Phase 1b opportunistically from cached matrix predictions;
+   report the PI-CAI map figure only if a representation passes the pre-declared
+   selection rule (Phase 1b of the working plan) before the thesis write-up.
+
+   **Original Sec 1, superseded, preserved for the record:** "Detection (FROC,
+   lesion AUROC, and case-level AUROC over all 1,499 cases) and lesion-matched
+   segmentation Dice are the endpoints answering SOP 1--2. Grade weighted F1 is
+   secondary. Retain ADR 0002 D8's GGG4+5 merged analysis and report grade
+   support, per-grade sensitivity, and uncertainty honestly."
 2. Select `model_best_grade` by `val_grade_balanced_accuracy`, a lesion-matched
    macro recall over supervised GGG2--5 matches, with mode `max`. Log
    `val_grade_weighted_f1` and `val_grade_matched_lesions` beside it. Do not use
@@ -73,15 +108,24 @@ Phase 6 reported number.
 
 ## Statistical Consequences
 
-Fold-0 arm order is not reproducible across the two available builds. The
-between-arm spread is approximately 0.025 mAP and 0.03 Dice, while within-arm
-epoch-to-epoch FROC variation is substantially larger. Five fold-level values per
-arm may be unable to resolve such effects under the predeclared Shapiro-Wilk then
-ANOVA/Tukey or Friedman plus Bonferroni-Wilcoxon procedure (alpha 0.05/6). Record
-the exact new-primary metric consumed by each SOP 3 test. Patient-level paired
+Per Sec 1a, SOP 3's tests (Shapiro-Wilk then ANOVA/Tukey, or Friedman plus
+Bonferroni-Wilcoxon at alpha 0.05/6) consume paired per-fold **grade weighted
+F1** for baseline vs. full, as pre-registered before this ADR's original
+detection/segmentation re-designation. Report detection (mAP, FROC) and
+segmentation (Dice) as supporting per-fold trajectories, not as the SOP 1-2
+decision metric.
+
+Fold-0 arm order is not reproducible across the two available builds on
+detection/segmentation (between-arm spread approximately 0.025 mAP and 0.03
+Dice, within-arm epoch-to-epoch FROC variation substantially larger); grade is
+data-limited (GGG4 approximately 30, GGG5 approximately 38 training lesions per
+fold). Both risk an underpowered five-fold-level test. Patient-level paired
 bootstrap confidence intervals required by ADR 0002 D7 carry the complementary,
-patient-level uncertainty. A predeclared null result is reportable; endpoints
-must not be changed after the five-fold results are known.
+patient-level uncertainty and are especially load-bearing here. A predeclared
+null or a wide-CI, inconclusive result on GGG2/GGG3 specifically is reportable
+and literature-consistent -- PDHD-Net (Wang et al., 2025) reported the same
+weakness at that boundary on a richer four-channel private-data input. Endpoints
+must not be changed again after the five-fold results are known.
 
 ## Consequences
 
