@@ -273,6 +273,13 @@ class SegmentationEnsembler(BaseEnsembler):
                 `itk_spacing`: itk spacing of image before preprocessing
                 `itk_direction`: itk direction of image before preprocessing
         """
+        if self.model_results is not None and not bool((self.overlap > 0).any()):
+            raise RuntimeError(
+                "Segmentation overlap map is empty while predictions are present. A state "
+                "saved before `overlap` was persisted cannot be reloaded: dividing by it "
+                "yields inf everywhere and argmax then returns background for every voxel. "
+                "Re-run prediction to regenerate the ensembler state."
+            )
         result = self.model_results / self.overlap[None]
 
         if restore:
@@ -309,6 +316,7 @@ class SegmentationEnsembler(BaseEnsembler):
             seg_key=self.seg_key,
             data_key=self.data_key,
             case_crop_weight=self.cache_crop_weight,
+            overlap=self.overlap,
             **kwargs,
         )
 
