@@ -31,6 +31,7 @@ from torchvision.models.detection.rpn import AnchorGenerator
 from nndet.utils.tensor import to_numpy
 from nndet.evaluator.det import BoxEvaluator
 from nndet.evaluator.seg import SegmentationEvaluator
+from nndet.evaluator.grade import GradeEvaluator
 
 from nndet.core.retina import BaseRetinaNet
 from nndet.core.boxes.matcher import IoUMatcher
@@ -134,6 +135,7 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             spacing=spacing,  # 传递spacing用于距离计算
             )
         self.seg_evaluator = SegmentationEvaluator.create()
+        self.grade_evaluator = GradeEvaluator.create() if self.model.grade_head is not None else None
 
         self.pre_trafo = Compose(
             FindInstances(
@@ -205,7 +207,7 @@ class RetinaUNetModule(LightningBaseModuleSWA):
         with torch.no_grad():
             batch = self.pre_trafo(**batch)
 
-        losses, _ = self.model.train_step(
+        losses, _, log_scalars = self.model.train_step(
             images=batch["data"],
             targets={
                 "target_boxes": batch["boxes"],
@@ -219,7 +221,10 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             batch_num=batch_idx,
         )
         loss = sum(losses.values())
-        return {"loss": loss, **{key: l.detach().item() for key, l in losses.items()}}
+        grade_supervised_lesions = sum(int(m.sum()) for m in batch["grade_supervised"])
+        return {"loss": loss, "grade_supervised_lesions": grade_supervised_lesions,
+                **{key: l.detach().item() for key, l in losses.items()},
+                **{key: value.detach().item() for key, value in log_scalars.items()}}
 
     def validation_step(self, batch, batch_idx):
         """
@@ -237,17 +242,19 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                     "target_grade_supervised": batch["grade_supervised"],
                     "grade_class_weights": self.grade_class_weights,
                 }
-            losses, prediction = self.model.train_step(
+            losses, prediction, log_scalars = self.model.train_step(
                 images=batch["data"],
                 targets=targets,
                 evaluation=True,
                 batch_num=batch_idx,
             )
             loss = sum(losses.values())
+            grade_supervised_lesions = sum(int(m.sum()) for m in batch["grade_supervised"])
 
         self.evaluation_step(prediction=prediction, targets=targets)
-        return {"loss": loss.detach().item(),
-                **{key: l.detach().item() for key, l in losses.items()}}
+        return {"loss": loss.detach().item(), "grade_supervised_lesions": grade_supervised_lesions,
+                **{key: l.detach().item() for key, l in losses.items()},
+                **{key: value.detach().item() for key, value in log_scalars.items()}}
 
     def evaluation_step(
         self,
@@ -301,6 +308,28 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             target=gt_seg,
             )
 
+        if self.grade_evaluator is not None and "pred_grade_probs" in prediction:
+            self.grade_evaluator.run_online_evaluation(
+                pred_boxes=pred_boxes,
+                pred_scores=pred_scores,
+                pred_grade_probs=to_numpy(prediction["pred_grade_probs"]),
+                gt_boxes=gt_boxes,
+                gt_grades=to_numpy(targets["target_grades"]),
+                gt_grade_supervised=to_numpy(targets["target_grade_supervised"]),
+            )
+
+    @staticmethod
+    def weighted_grade_mean(values, weights):
+        numerator = float(np.dot(values, weights))
+        denominator = float(np.sum(weights))
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            device = (torch.device("cuda", torch.cuda.current_device())
+                      if torch.cuda.is_available() else torch.device("cpu"))
+            totals = torch.tensor([numerator, denominator], device=device, dtype=torch.float64)
+            torch.distributed.all_reduce(totals)
+            numerator, denominator = totals.tolist()
+        return numerator / denominator if denominator else float("inf")
+
     def training_epoch_end(self, training_step_outputs):
         """
         Log train loss to loguru logger
@@ -315,10 +344,10 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                     vals[_k].append(_v)
 
         for _key, _vals in vals.items():
-            mean_val = np.mean(_vals)
+            mean_val = self.weighted_grade_mean(_vals, vals["grade_loss_weight"]) if _key == "grade" else np.mean(_vals)
             if _key == "loss":
                 logger.info(f"Train loss reached: {mean_val:0.5f}")
-            self.log(f"train_{_key}", mean_val, sync_dist=True)
+            self.log(f"train_{_key}", mean_val, sync_dist=_key != "grade")
         return super().training_epoch_end(training_step_outputs)
 
     def validation_epoch_end(self, validation_step_outputs):
@@ -332,10 +361,10 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                 vals[_k].append(_v)
 
         for _key, _vals in vals.items():
-            mean_val = np.mean(_vals)
+            mean_val = self.weighted_grade_mean(_vals, vals["grade_loss_weight"]) if _key == "grade" else np.mean(_vals)
             if _key == "loss":
                 logger.info(f"Val loss reached: {mean_val:0.5f}")
-            self.log(f"val_{_key}", mean_val, sync_dist=True)
+            self.log(f"val_{_key}", mean_val, sync_dist=_key != "grade")
 
         # process and log metrics
         self.evaluation_end()
@@ -364,6 +393,13 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                 merged_seg_results[key].extend(value)
         self.seg_evaluator.results_list = merged_seg_results
 
+        if self.grade_evaluator is not None:
+            grade_results = [None] * world_size
+            torch.distributed.all_gather_object(grade_results, self.grade_evaluator.results_list)
+            self.grade_evaluator.results_list = [
+                result for rank_results in grade_results for result in rank_results
+            ]
+
     def evaluation_end(self):
         """
         Uses the cached values from `evaluation_step` to perform the evaluation
@@ -377,6 +413,16 @@ class RetinaUNetModule(LightningBaseModuleSWA):
         seg_scores, _ = self.seg_evaluator.finish_online_evaluation()
         self.seg_evaluator.reset()
         metric_scores.update(seg_scores)
+
+        if self.grade_evaluator is not None:
+            grade_scores, grade_curves = self.grade_evaluator.finish_online_evaluation()
+            self.grade_evaluator.reset()
+            if grade_scores["grade_matched_lesions"]:
+                logger.info(f"Grade confusion matrix: {grade_curves['grade_confusion_matrix'].tolist()}")
+                logger.info(f"Grade per-class sensitivity: {grade_curves['grade_per_class_sensitivity']}")
+                for key, item in grade_scores.items():
+                    self.log(f"val_{key}", item, on_step=None, on_epoch=True,
+                             prog_bar=False, logger=True)
 
         # 输出Dice分数
         logger.info(f"Dice Score: {seg_scores['seg_dice']:0.3f}")

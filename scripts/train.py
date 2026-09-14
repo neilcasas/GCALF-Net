@@ -46,6 +46,7 @@ from nndet.evaluator.registry import save_metric_output, evaluate_box_dir, \
     evaluate_case_dir, evaluate_seg_dir
 from nndet.inference.ensembler.base import extract_results
 from nndet.ptmodule import MODULE_REGISTRY
+from nndet.training.grade_freeze import GradeHeadFreezeCallback
 
 SCRIPT_PATH = Path(__file__).resolve()
 
@@ -96,6 +97,8 @@ def sweep():
     parser.add_argument('--num-tta-transforms', type=int, default=None,
                         help="Number of TTA transforms (default: get_predictor's default, "
                              "8 for 3D). Pass 1 for a fast, TTA-free diagnostic sweep.")
+    parser.add_argument('-o', '--overwrites', type=str, nargs='+', required=False,
+                        help="Config overwrites, e.g. inference_kwargs.do_seg=true")
     args = parser.parse_args()
     task = args.task
     model = args.model
@@ -107,6 +110,7 @@ def sweep():
         checkpoint=args.checkpoint,
         output_dir=args.output_dir,
         num_tta_transforms=args.num_tta_transforms,
+        overwrites=args.overwrites,
         )
 
 
@@ -302,6 +306,15 @@ def _train(
             mode=cfg["trainer_cfg"].get("grade_monitor_mode", "min"),
         )
         callbacks.append(grade_checkpoint_cb)
+    grade_freeze_patience = cfg["trainer_cfg"].get("grade_freeze_patience")
+    if grade_freeze_patience is not None:
+        if grade_monitor_key is None:
+            raise ValueError("grade_freeze_patience requires trainer_cfg.grade_monitor_key")
+        callbacks.append(GradeHeadFreezeCallback(
+            monitor=grade_monitor_key,
+            patience=int(grade_freeze_patience),
+            mode=cfg["trainer_cfg"].get("grade_monitor_mode", "max"),
+        ))
     callbacks.append(LearningRateMonitor(logging_interval="epoch"))
 
     if is_primary:
@@ -396,6 +409,7 @@ def _sweep(
     checkpoint: str = "last",
     output_dir: Path = None,
     num_tta_transforms: int = None,
+    overwrites: List[str] = None,
     ):
     """
     Determine best postprocessing parameters for a trained model
@@ -413,6 +427,8 @@ def _sweep(
     train_dir = nndet_data_dir / task / model / f"fold{fold}"
 
     cfg = OmegaConf.load(str(train_dir / "config.yaml"))
+    if overwrites:
+        cfg.merge_with(OmegaConf.from_dotlist(overwrites))
     os.chdir(str(train_dir))
 
     for imp in cfg.get("additional_imports", []):

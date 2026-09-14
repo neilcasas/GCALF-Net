@@ -42,3 +42,13 @@ def grade_loss(logits, grade_targets, grade_supervised_mask, class_weights):
     if torch.any(supervised_targets < GRADE_MIN) or torch.any(supervised_targets > GRADE_MAX):
         raise ValueError(f"Grade targets must be GGG{GRADE_MIN}-{GRADE_MAX}, got {supervised_targets.tolist()}")
     return F.cross_entropy(supervised_logits, grade_to_index(supervised_targets), weight=class_weights)
+
+
+def grade_loss_weight(grade_targets, grade_supervised_mask, class_weights):
+    """Return the denominator used by the masked weighted cross-entropy."""
+    if not grade_supervised_mask.any():
+        return grade_targets.new_zeros((), dtype=torch.float)
+    supervised_targets = grade_targets[grade_supervised_mask]
+    if class_weights is None:
+        return grade_targets.new_tensor(float(supervised_targets.numel()))
+    return class_weights[grade_to_index(supervised_targets)].sum()

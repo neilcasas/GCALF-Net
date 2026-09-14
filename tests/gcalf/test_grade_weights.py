@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 import torch
 
@@ -30,3 +31,9 @@ def test_grade_weights_reject_a_training_fold_missing_a_grade(tmp_path):
 
     with pytest.raises(ValueError, match="no grade-supervised lesions"):
         RetinaUNetModule.compute_grade_class_weights(dataset)
+
+
+def test_weighted_grade_mean_ignores_unsupervised_batches():
+    assert RetinaUNetModule.weighted_grade_mean([1.6, 0.0], [3.2, 0.0]) == pytest.approx(1.6)
+    assert np.mean([1.6, 0.0]) == pytest.approx(0.8)
+    assert RetinaUNetModule.weighted_grade_mean([0.0], [0.0]) == float("inf")

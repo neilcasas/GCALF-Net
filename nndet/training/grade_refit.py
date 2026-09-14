@@ -37,6 +37,15 @@ def freeze_detector(model):
     model.grade_head.train()
 
 
+def freeze_grade_head(model):
+    """Make the grade branch immutable while the detector continues to train."""
+    if getattr(model, "grade_head", None) is None:
+        raise ValueError("The model has no grade branch to freeze")
+    model.grade_head.eval()
+    for parameter in model.grade_head.parameters():
+        parameter.requires_grad = False
+
+
 def detector_state(model):
     """Clone state outside the grade branch for an exact post-run audit."""
     return {

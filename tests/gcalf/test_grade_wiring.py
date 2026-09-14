@@ -9,6 +9,7 @@ change to the preprocessing pickle format and is out of scope here; these
 tests exercise the model-side plumbing directly with hand-built targets.
 """
 import torch
+import torch.nn as nn
 
 from nndet.arch.conv import ConvInstanceRelu, Generator
 from nndet.arch.encoder.gcalf.grade_head import GradeHead
@@ -68,6 +69,56 @@ def test_no_ground_truth_boxes_yields_all_unsupervised():
 
     assert matched_grades[0].shape == (3,)
     assert not matched_grade_supervised[0].any()
+
+
+class _LossHead:
+    def compute_loss(self, prediction, labels, matched_boxes, anchors):
+        return {"cls": prediction["grade_logits"].sum() * 0}, torch.tensor([0, 1]), torch.tensor([], dtype=torch.long)
+
+
+class _RetinaTrainStep(BaseRetinaNet):
+    def __init__(self):
+        nn.Module.__init__(self)
+        self.grade_head = nn.Identity()
+        self.segmenter = None
+        self.head = _LossHead()
+        self.logits = nn.Parameter(torch.tensor([[2.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]))
+
+    def forward(self, images):
+        return {"grade_logits": self.logits}, [torch.empty(2, 4)], None
+
+    def assign_targets_to_anchors(self, anchors, target_boxes, target_classes):
+        return [], []
+
+    def assign_grades_to_anchors(self, anchors, target_boxes, target_grades, target_grade_supervised):
+        return target_grades, target_grade_supervised
+
+
+def test_train_step_returns_grade_loss_weight_outside_the_optimized_losses_dict():
+    model = _RetinaTrainStep()
+    targets = {
+        "target_boxes": [torch.empty(2, 4)],
+        "target_classes": [torch.tensor([0, 0])],
+        "target_seg": torch.empty(1),
+        "target_grades": [torch.tensor([2, 3])],
+        "target_grade_supervised": [torch.tensor([True, False])],
+        "grade_class_weights": torch.tensor([1.0, 2.0, 4.0, 8.0]),
+    }
+
+    losses, _, log_scalars = model.train_step(torch.empty(1), targets, evaluation=False, batch_num=0)
+
+    assert log_scalars["grade_loss_weight"].item() == 1.0
+    assert "grade_loss_weight" not in losses
+
+
+def test_train_step_has_no_grade_log_scalar_when_grade_targets_are_absent():
+    model = _RetinaTrainStep()
+    losses, _, log_scalars = model.train_step(
+        torch.empty(1), {"target_boxes": [], "target_classes": [], "target_seg": torch.empty(1)},
+        evaluation=False, batch_num=0)
+
+    assert log_scalars == {}
+    assert "grade" not in losses
 
 
 def test_grade_classifier_head_output_count_matches_box_logits_arithmetic():

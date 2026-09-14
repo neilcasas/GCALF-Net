@@ -296,7 +296,7 @@ def test_m2_baseline_forward_and_overfit_two_cases():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     optimizer.zero_grad(set_to_none=True)
-    benign_losses, _ = model.train_step(
+    benign_losses, _, _ = model.train_step(
         images=negative["data"], targets=_loss_target(negative), evaluation=False, batch_num=0)
     sum(benign_losses.values()).backward()
     assert _gradient_norm(model.grade_head) == 0.0
@@ -314,7 +314,7 @@ def test_m2_baseline_forward_and_overfit_two_cases():
         total_loss = torch.zeros((), device=device)
         for batch in (positive, negative):
             with torch.cuda.amp.autocast():
-                losses, _ = model.train_step(
+                losses, _, _ = model.train_step(
                     images=batch["data"],
                     targets=_loss_target(batch),
                     evaluation=False,

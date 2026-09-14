@@ -40,7 +40,7 @@ class AbstractModel(torch.nn.Module):
                    targets: dict,
                    evaluation: bool,
                    batch_num: int,
-                   ) -> Tuple[Dict[str, torch.Tensor], Optional[Dict]]:
+                   ) -> Tuple[Dict[str, torch.Tensor], Optional[Dict], Dict[str, torch.Tensor]]:
         """
         Perform a single training step
 

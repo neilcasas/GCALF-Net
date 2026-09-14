@@ -5,6 +5,7 @@ import pytest
 import SimpleITK as sitk
 
 from gcalf_eval.grade_metrics import lesion_instances, match_grade_predictions, summarize_grade_matches
+from nndet.evaluator.grade import GradeEvaluator
 
 
 def test_lesion_instances_keeps_nndetection_native_array_axis_order(tmp_path):
@@ -133,3 +134,44 @@ def test_matching_uses_nndetection_box_order_and_does_not_penalize_ungraded_true
     assert misses == 0
     assert false_positives == 0
     assert matched_ungraded == 1
+
+
+def test_grade_evaluator_excludes_ungraded_matches_and_returns_only_scalar_scores():
+    evaluator = GradeEvaluator.create()
+    boxes = [np.array([[0, 0, 2, 2, 0, 2], [4, 4, 6, 6, 4, 6]], dtype=np.float32)]
+    evaluator.run_online_evaluation(
+        boxes, [np.array([0.9, 0.8], dtype=np.float32)],
+        [np.array([[0.9, 0.05, 0.03, 0.02], [0.25] * 4], dtype=np.float32)],
+        boxes, [np.array([2, -1])], [np.array([True, False])])
+
+    scores, curves = evaluator.finish_online_evaluation()
+
+    assert scores["grade_matched_lesions"] == 1.0
+    assert all(isinstance(value, (float, int)) for value in scores.values())
+    assert curves["grade_confusion_matrix"].tolist() == [[1, 0, 0, 0]] + [[0] * 4] * 3
+    assert curves["grade_per_class_sensitivity"]["GGG2"] == 1.0
+
+
+def test_grade_evaluator_accumulates_batches_and_zero_matches_are_scalar_safe():
+    first = GradeEvaluator.create()
+    second = GradeEvaluator.create()
+    kwargs = dict(
+        pred_boxes=[np.array([[0, 0, 2, 2, 0, 2]], dtype=np.float32)],
+        pred_scores=[np.array([0.9], dtype=np.float32)],
+        pred_grade_probs=[np.array([[0.9, 0.05, 0.03, 0.02]], dtype=np.float32)],
+        gt_boxes=[np.array([[0, 0, 2, 2, 0, 2]], dtype=np.float32)],
+        gt_grades=[np.array([2])],
+        gt_grade_supervised=[np.array([True])],
+    )
+    first.run_online_evaluation(**kwargs)
+    first.run_online_evaluation(**kwargs)
+    second.run_online_evaluation(
+        pred_boxes=kwargs["pred_boxes"] * 2, pred_scores=kwargs["pred_scores"] * 2,
+        pred_grade_probs=kwargs["pred_grade_probs"] * 2, gt_boxes=kwargs["gt_boxes"] * 2,
+        gt_grades=kwargs["gt_grades"] * 2, gt_grade_supervised=kwargs["gt_grade_supervised"] * 2)
+    assert first.finish_online_evaluation()[0] == second.finish_online_evaluation()[0]
+
+    empty = GradeEvaluator.create()
+    scores, _ = empty.finish_online_evaluation()
+    assert scores["grade_matched_lesions"] == 0.0
+    assert all(isinstance(value, (float, int)) for value in scores.values())

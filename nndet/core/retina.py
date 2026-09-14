@@ -20,7 +20,7 @@ from nndet.arch.decoder.base import DecoderType
 from nndet.arch.heads.segmenter import SegmenterType
 from nndet.arch.heads.comb import HeadType
 from nndet.core.boxes.anchors import AnchorGeneratorType
-from nndet.arch.encoder.gcalf.grade_head import grade_loss, index_to_grade
+from nndet.arch.encoder.gcalf.grade_head import grade_loss, grade_loss_weight, index_to_grade
 
 
 class BaseRetinaNet(AbstractModel):
@@ -95,7 +95,7 @@ class BaseRetinaNet(AbstractModel):
                    evaluation: bool,
                    batch_num: int,
                    ) -> Tuple[
-            Dict[str, torch.Tensor], Optional[Dict]]:
+            Dict[str, torch.Tensor], Optional[Dict], Dict[str, torch.Tensor]]:
         """
         Perform a single training step (forward pass + loss computation)
 
@@ -141,6 +141,7 @@ class BaseRetinaNet(AbstractModel):
             anchors, target_boxes, target_classes)
 
         losses = {}
+        log_scalars = {}
         head_losses, pos_idx, neg_idx = self.head.compute_loss(
             pred_detection, labels, matched_gt_boxes, anchors)
         losses.update(head_losses)
@@ -162,6 +163,9 @@ class BaseRetinaNet(AbstractModel):
             losses["grade"] = grade_loss(
                 grade_logits, batch_grades, batch_grade_supervised,
                 targets.get("grade_class_weights"))
+            log_scalars["grade_loss_weight"] = grade_loss_weight(
+                batch_grades, batch_grade_supervised,
+                targets.get("grade_class_weights"))
 
         if self.segmenter is not None:
             losses.update(self.segmenter.compute_loss(pred_seg, target_seg))
@@ -180,7 +184,7 @@ class BaseRetinaNet(AbstractModel):
         #                             anchors=anchors, pos_idx=pos_idx,
         #                             neg_idx=neg_idx, seg=seg_targets)
 
-        return losses, prediction
+        return losses, prediction, log_scalars
 
     @torch.no_grad()
     def postprocess_for_inference(self,

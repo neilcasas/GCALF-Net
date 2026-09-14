@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
+import torch
+import torch.nn as nn
 
 from gcalf_eval.grade_pilot import fit_temperature, make_split_manifest, temperature_scale
+from nndet.training.grade_refit import freeze_grade_head
 
 
 def test_manifest_is_patient_disjoint_and_has_all_grades(tmp_path):
@@ -39,3 +42,23 @@ def test_manifest_stratifies_single_grade_patient_groups(tmp_path):
     manifest = make_split_manifest(grades, tmp_path / "split.json")
     assert all(all(support[str(grade)] for grade in range(2, 6))
                for support in manifest["grade_support"].values())
+
+
+def test_freezing_grade_head_leaves_detection_parameters_trainable():
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.detector = nn.Linear(2, 1)
+            self.grade_head = nn.Linear(2, 4)
+
+    model = Model()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    grade_before = [parameter.detach().clone() for parameter in model.grade_head.parameters()]
+    detector_before = [parameter.detach().clone() for parameter in model.detector.parameters()]
+    freeze_grade_head(model)
+    loss = model.detector(torch.ones(1, 2)).sum()
+    loss.backward()
+    optimizer.step()
+
+    assert all(torch.equal(before, after) for before, after in zip(grade_before, model.grade_head.parameters()))
+    assert any(not torch.equal(before, after) for before, after in zip(detector_before, model.detector.parameters()))

@@ -2,7 +2,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from nndet.arch.encoder.gcalf.grade_head import GradeHead, grade_loss, grade_to_index, index_to_grade
+from nndet.arch.encoder.gcalf.grade_head import GradeHead, grade_loss, grade_loss_weight, grade_to_index, index_to_grade
 
 
 def test_batch_with_zero_supervised_lesions_returns_a_loss_disconnected_from_the_graph():
@@ -78,3 +78,26 @@ def test_grade_loss_rejects_supervised_labels_outside_ggg2_to_5():
     logits = torch.zeros(1, 4)
     with pytest.raises(ValueError, match="GGG2-5"):
         grade_loss(logits, torch.tensor([1]), torch.tensor([True]), class_weights=None)
+
+
+def test_grade_loss_weight_reconstructs_pooled_weighted_cross_entropy():
+    logits_one = torch.tensor([[2.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]])
+    grades_one = torch.tensor([2, 3])
+    mask_one = torch.tensor([True, True])
+    logits_two = torch.tensor([[0.0, 0.0, 1.0, 0.0]])
+    grades_two = torch.tensor([4])
+    mask_two = torch.tensor([False])
+    weights = torch.tensor([1.0, 2.0, 4.0, 8.0])
+
+    loss_one = grade_loss(logits_one, grades_one, mask_one, weights)
+    loss_two = grade_loss(logits_two, grades_two, mask_two, weights)
+    weight_one = grade_loss_weight(grades_one, mask_one, weights)
+    weight_two = grade_loss_weight(grades_two, mask_two, weights)
+    pooled = grade_loss(torch.cat([logits_one, logits_two]), torch.cat([grades_one, grades_two]),
+                        torch.cat([mask_one, mask_two]), weights)
+
+    assert torch.allclose((loss_one * weight_one + loss_two * weight_two) / (weight_one + weight_two), pooled,
+                          atol=1e-6)
+    assert not torch.allclose((loss_one + loss_two) / 2, pooled)
+    assert weight_two.item() == 0.0
+    assert grade_loss_weight(grades_one, mask_one, None).item() == 2.0
