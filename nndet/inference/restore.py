@@ -120,7 +120,7 @@ def restore_fmap(fmap: np.ndarray,
             crop_bbox[c][1] = np.min(
                 (crop_bbox[c][0] + fmap_old_spacing.shape[c + 1], original_size_before_cropping[c]))
 
-        _slices = [...] + [slice(b[0], b[1]) for b in crop_bbox]
+        _slices = (Ellipsis, *[slice(b[0], b[1]) for b in crop_bbox])
         tmp[_slices] = fmap_old_spacing
         fmap_original = tmp
     else:
