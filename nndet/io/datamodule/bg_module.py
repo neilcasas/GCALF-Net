@@ -243,7 +243,11 @@ class Datamodule(BaseModule):
             Iterable: dataloader for validation
         """
         dataloader_cls = DATALOADER_REGISTRY.get(self.dataloader)
-        logger.info(f"Using validation {self.dataloader} with {self.dataloader_kwargs}")
+        val_dataloader_kwargs = dict(self.dataloader_kwargs)
+        # Grade balancing is a training intervention. Validation must retain its
+        # natural prior so grade monitors are interpretable.
+        val_dataloader_kwargs["grade_balanced_sampling"] = False
+        logger.info(f"Using validation {self.dataloader} with {val_dataloader_kwargs}")
 
         dl_val = dataloader_cls(
             data=self.dataset_val,
@@ -255,7 +259,7 @@ class Datamodule(BaseModule):
             pad_mode="constant",
             num_batches_per_epoch=self.augment_cfg[
                 "num_val_batches_per_epoch"],
-            **self.dataloader_kwargs,
+            **val_dataloader_kwargs,
             )
 
         val_gen = get_augmenter(

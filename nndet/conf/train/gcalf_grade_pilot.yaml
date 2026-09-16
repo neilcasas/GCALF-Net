@@ -9,8 +9,9 @@ exp:
   tag: "_gradepilot"
 
 trainer_cfg:
-  max_num_epochs: 12
+  max_num_epochs: 13
   swa_epochs: 0
+  grade_checkpoint: "final"
 
 # `scripts/grade_refit.py` is the only consumer of this pilot mode.  The
 # standard Lightning trainer remains the default multitask training path.

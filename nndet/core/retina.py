@@ -20,7 +20,12 @@ from nndet.arch.decoder.base import DecoderType
 from nndet.arch.heads.segmenter import SegmenterType
 from nndet.arch.heads.comb import HeadType
 from nndet.core.boxes.anchors import AnchorGeneratorType
-from nndet.arch.encoder.gcalf.grade_head import grade_loss, grade_loss_weight, index_to_grade
+from nndet.arch.encoder.gcalf.grade_head import (
+    grade_anchor_class_counts,
+    grade_loss,
+    grade_loss_weight,
+    index_to_grade,
+)
 
 
 class BaseRetinaNet(AbstractModel):
@@ -166,6 +171,13 @@ class BaseRetinaNet(AbstractModel):
             log_scalars["grade_loss_weight"] = grade_loss_weight(
                 batch_grades, batch_grade_supervised,
                 targets.get("grade_class_weights"))
+            if not evaluation:
+                anchor_counts = grade_anchor_class_counts(batch_grades, batch_grade_supervised)
+                log_scalars["grade_positive_anchors"] = batch_grades.new_tensor(batch_grades.numel())
+                log_scalars["grade_supervised_anchors"] = batch_grade_supervised.sum()
+                log_scalars["grade_unsupervised_anchors"] = (~batch_grade_supervised).sum()
+                for grade, count in enumerate(anchor_counts, start=2):
+                    log_scalars[f"grade_anchor_count_GGG{grade}"] = count
 
         if self.segmenter is not None:
             losses.update(self.segmenter.compute_loss(pred_seg, target_seg))

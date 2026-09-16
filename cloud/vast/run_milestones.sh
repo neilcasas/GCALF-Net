@@ -41,7 +41,7 @@ fi
 export det_data=${det_data:-$workspace/det_data}
 export det_models=${det_models:-$workspace/det_models}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
-export det_num_threads=${det_num_threads:-8}
+export det_num_threads=${det_num_threads:-16}
 evidence_dir=$workspace/evidence
 mkdir -p "$evidence_dir/m0" "$evidence_dir/m1" "$evidence_dir/m2" "$evidence_dir/m3" "$det_data" "$det_models"
 

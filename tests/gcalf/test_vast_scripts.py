@@ -1,5 +1,6 @@
 """Focused command-line tests for the single-instance Vast.ai workflow helpers."""
 
+import os
 import subprocess
 import tarfile
 from pathlib import Path
@@ -10,6 +11,8 @@ HOST = ROOT / "cloud" / "vast" / "host.sh"
 DOWNLOAD = ROOT / "cloud" / "vast" / "download_picai.sh"
 EXPORT = ROOT / "cloud" / "vast" / "export_results.sh"
 PAUSE_AND_BACKUP = ROOT / "cloud" / "vast" / "pause_and_backup.sh"
+PULL_GRADE_METADATA = ROOT / "cloud" / "vast" / "pull_grade_metadata.sh"
+GRADE_REMEDIATION = ROOT / "cloud" / "vast" / "run_grade_remediation.sh"
 
 
 def run_script(script: Path, *args: str, cwd=None):
@@ -116,3 +119,31 @@ def test_pause_and_backup_creates_a_checksumming_snapshot_without_a_process(tmp_
     assert (backup / "SHA256SUMS").is_file()
     with tarfile.open(backup / "final_1_fold1.tar") as archive:
         assert "fold1/model_last.ckpt" in archive.getnames()
+
+
+def test_grade_metadata_pull_dry_run_requires_an_explicit_instance_and_never_overwrites(tmp_path):
+    result = run_script(PULL_GRADE_METADATA, "--destination", str(tmp_path / "metadata"), "--dry-run")
+    assert result.returncode == 2
+    assert "--instance-id" in result.stderr
+
+    result = run_script(PULL_GRADE_METADATA, "--instance-id", "123", "--destination", str(tmp_path / "metadata"),
+                        "--dry-run")
+    assert result.returncode == 0, result.stderr
+    assert "vastai copy C.123:" in result.stdout
+    assert "audit_grade_metadata.py" in result.stdout
+
+
+def test_grade_remediation_dry_run_uses_multiprocessing_and_refuses_missing_anchor_counts(tmp_path):
+    environment = {**os.environ, "det_models": str(tmp_path / "models")}
+    result = subprocess.run(
+        ["bash", str(GRADE_REMEDIATION), "--task", "Task2201_PICAI_csPCa", "--stage", "fix-a", "--tag", "a",
+         "--repo-dir", str(ROOT), "--dry-run"], text=True, capture_output=True, env=environment)
+    assert result.returncode == 2
+    assert "--anchor-counts" in result.stderr
+
+    result = subprocess.run(
+        ["bash", str(GRADE_REMEDIATION), "--task", "Task2201_PICAI_csPCa", "--stage", "throughput", "--tag", "a",
+         "--repo-dir", str(ROOT), "--dry-run"], text=True, capture_output=True, env=environment)
+    assert result.returncode == 0, result.stderr
+    assert "det_num_threads=16" in result.stdout
+    assert "augment_cfg.multiprocessing=true" in result.stdout

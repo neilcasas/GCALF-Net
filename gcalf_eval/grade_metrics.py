@@ -237,6 +237,18 @@ def summarize_grade_matches(true_grades, predicted_grades, misses, false_positiv
     accuracy = float(tp.sum() / support.sum()) if support.sum() else 0.0
     macro_f1 = float(f1[present].mean()) if present.any() else 0.0
     balanced_accuracy = float(recall[present].mean()) if present.any() else 0.0
+    # Quadratic-weighted Cohen's kappa on the fixed ordinal GGG2--5 scale.
+    # It is undefined without observed matched grades or expected agreement.
+    total = confusion.sum()
+    if total:
+        weights = np.square(np.subtract.outer(np.arange(4), np.arange(4))) / 9.0
+        expected = np.outer(support, predicted) / total
+        observed_disagreement = float((weights * confusion).sum() / total)
+        expected_disagreement = float((weights * expected).sum() / total)
+        quadratic_weighted_kappa = (1.0 - observed_disagreement / expected_disagreement
+                                    if expected_disagreement > 0 else None)
+    else:
+        quadratic_weighted_kappa = None
     summary = {
         "grade_confusion_matrix": confusion.tolist(),
         "grade_matched_detections": int(len(true_grades)),
@@ -247,6 +259,7 @@ def summarize_grade_matches(true_grades, predicted_grades, misses, false_positiv
         "grade_accuracy": accuracy,
         "grade_macro_f1": macro_f1,
         "grade_balanced_accuracy": balanced_accuracy,
+        "grade_quadratic_weighted_kappa": quadratic_weighted_kappa,
         "grade_per_class_sensitivity": {f"GGG{grade}": float(recall[grade - 2]) for grade in GRADE_VALUES},
         "grade_class_support": {f"GGG{grade}": int(support[grade - 2]) for grade in GRADE_VALUES},
         "grade_score_threshold": float(score_threshold),

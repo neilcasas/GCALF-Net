@@ -19,6 +19,11 @@ from nndet.io.load import load_pickle
 from nndet.io.paths import get_task, get_training_dir
 
 
+# Declared before the remediation pilot. This is a fixed detection-score
+# operating point, not a threshold selected to maximize a grade metric.
+GRADE_SCORE_THRESHOLD = 0.05
+
+
 METRIC_FIELDS = (
     "task",
     "model",
@@ -40,6 +45,7 @@ METRIC_FIELDS = (
     "grade_accuracy",
     "grade_macro_f1",
     "grade_balanced_accuracy",
+    "grade_quadratic_weighted_kappa",
     "grade_macro_ovr_auroc",
     "grade_multiclass_brier",
     "grade_negative_log_likelihood",
@@ -169,7 +175,7 @@ def run_evaluation(
     model: str,
     fold: int,
     split: str,
-    grade_score_threshold: float = 0.0,
+    grade_score_threshold: float = GRADE_SCORE_THRESHOLD,
     detection_score_threshold: float = 0.0,
     seg_score_threshold: float = 0.0,
 ) -> Dict[str, object]:
@@ -340,8 +346,9 @@ def main() -> None:
     parser.add_argument("--case-ids-file", type=Path,
                         help="One case identifier per line; required with --prediction-dir.")
     parser.add_argument(
-        "--grade-score-threshold", type=float, default=0.0,
-        help="Drop grade-matching predictions scoring below this before matching (default: 0.0, i.e. no threshold).",
+        "--grade-score-threshold", type=float, default=GRADE_SCORE_THRESHOLD,
+        help="Drop grade-matching predictions scoring below this before matching "
+             "(default: 0.05; fixed protocol operating point).",
     )
     parser.add_argument(
         "--detection-score-threshold", type=float, default=0.0,

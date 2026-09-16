@@ -3,15 +3,24 @@ defaults:
   - v001
 
 trainer_cfg:
-  # Detection and grading peak at different epochs.  Keep both selections;
-  # ``model_best`` remains the detection-mAP checkpoint and this creates
-  # ``model_best_grade`` from patch-level lesion-matched macro recall.
+  # ``model_best`` remains the detection-mAP checkpoint. Grade evaluation uses
+  # the deterministic state after the declared SWA pass, not an argmax over a
+  # near-chance patch-level monitor (ADR 0003 Sec 2).
+  grade_checkpoint: "post_swa"
   grade_monitor_key: "val_grade_balanced_accuracy"
   grade_monitor_mode: "max"
+  # Keep lesion weights until Stage 2 records sampled-anchor counts. Anchor
+  # weights must be supplied as four committed counts, never inferred here.
+  grade_class_weight_source: "lesion"
   # Protocol lock (ADR 0003 Sec 5 / Sec 5a): grade-head freezing is DISABLED for
   # the five-fold matrix.  Declared explicitly rather than left absent so the
   # decision is recorded in the configuration the runs resolve from.
   grade_freeze_patience: null
+
+augment_cfg:
+  dataloader_kwargs:
+    # Stage 3 enables this only for its fresh, gated remediation pilot.
+    grade_balanced_sampling: false
 
 model_cfg:
   encoder_kwargs:

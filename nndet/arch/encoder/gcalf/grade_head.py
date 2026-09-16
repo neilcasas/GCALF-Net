@@ -52,3 +52,22 @@ def grade_loss_weight(grade_targets, grade_supervised_mask, class_weights):
     if class_weights is None:
         return torch.tensor(supervised_targets.numel(), device=grade_targets.device, dtype=torch.float)
     return class_weights[grade_to_index(supervised_targets)].sum()
+
+
+def grade_anchor_class_counts(grade_targets, grade_supervised_mask):
+    """Count CE-eligible sampled positive anchors by GGG2--5.
+
+    ``grade_targets`` has already been indexed by the detection head's
+    positive-anchor sampler.  Counting here therefore measures the class prior
+    actually presented to the grade cross-entropy, rather than lesion metadata
+    or pre-sampling ATSS candidates.
+    """
+    if grade_targets.shape != grade_supervised_mask.shape:
+        raise ValueError("Grade targets and supervision mask must have the same shape")
+    counts = torch.zeros(NUM_GRADES, dtype=torch.long, device=grade_targets.device)
+    if not grade_supervised_mask.any():
+        return counts
+    supervised_targets = grade_targets[grade_supervised_mask]
+    if torch.any(supervised_targets < GRADE_MIN) or torch.any(supervised_targets > GRADE_MAX):
+        raise ValueError(f"Grade targets must be GGG{GRADE_MIN}-{GRADE_MAX}, got {supervised_targets.tolist()}")
+    return torch.bincount(grade_to_index(supervised_targets), minlength=NUM_GRADES)

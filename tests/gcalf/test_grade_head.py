@@ -2,7 +2,14 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from nndet.arch.encoder.gcalf.grade_head import GradeHead, grade_loss, grade_loss_weight, grade_to_index, index_to_grade
+from nndet.arch.encoder.gcalf.grade_head import (
+    GradeHead,
+    grade_anchor_class_counts,
+    grade_loss,
+    grade_loss_weight,
+    grade_to_index,
+    index_to_grade,
+)
 
 
 def test_batch_with_zero_supervised_lesions_returns_a_loss_disconnected_from_the_graph():
@@ -101,3 +108,18 @@ def test_grade_loss_weight_reconstructs_pooled_weighted_cross_entropy():
     assert not torch.allclose((loss_one + loss_two) / 2, pooled)
     assert weight_two.item() == 0.0
     assert grade_loss_weight(grades_one, mask_one, None).item() == 2.0
+
+
+def test_grade_anchor_counts_measure_only_sampled_supervised_positive_anchors():
+    grades = torch.tensor([0, 2, 2, 3, 4, 5, 5])
+    supervised = torch.tensor([False, True, True, True, False, True, True])
+
+    counts = grade_anchor_class_counts(grades, supervised)
+
+    assert counts.tolist() == [2, 1, 0, 2]
+    assert counts.sum().item() == supervised.sum().item()
+
+
+def test_grade_anchor_counts_reject_bad_supervised_label():
+    with pytest.raises(ValueError, match="GGG2-5"):
+        grade_anchor_class_counts(torch.tensor([1]), torch.tensor([True]))

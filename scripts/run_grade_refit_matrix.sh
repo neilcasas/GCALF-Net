@@ -15,7 +15,7 @@ models=(
     RetinaUNetV001_D3V001_3d_full
 )
 
-export det_data=$data_root det_models=$models_root OMP_NUM_THREADS=8 det_num_threads=8
+export det_data=$data_root det_models=$models_root OMP_NUM_THREADS=8 det_num_threads=16
 cd "$repo_dir"
 [[ -f "$split_manifest" ]] || { echo "Missing split manifest: $split_manifest" >&2; exit 2; }
 

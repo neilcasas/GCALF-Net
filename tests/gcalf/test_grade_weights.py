@@ -33,6 +33,26 @@ def test_grade_weights_reject_a_training_fold_missing_a_grade(tmp_path):
         RetinaUNetModule.compute_grade_class_weights(dataset)
 
 
+def test_grade_weights_can_use_the_measured_sampled_anchor_prior():
+    weights = RetinaUNetModule.compute_grade_class_weights(anchor_class_counts=[100, 50, 25, 25])
+
+    assert torch.allclose(weights, torch.tensor([0.5, 1.0, 2.0, 2.0]) / 1.375)
+
+
+def test_anchor_grade_weights_reject_missing_or_malformed_counts():
+    with pytest.raises(ValueError, match="Expected 4"):
+        RetinaUNetModule.compute_grade_class_weights(anchor_class_counts=[1, 2, 3])
+    with pytest.raises(ValueError, match="finite and positive"):
+        RetinaUNetModule.compute_grade_class_weights(anchor_class_counts=[1, 2, 0, 4])
+
+
+def test_bprime_anchor_counts_restore_near_uniform_weights():
+    weights = RetinaUNetModule.compute_grade_class_weights(
+        anchor_class_counts=[30118, 26390, 23403, 24923])
+
+    assert torch.allclose(weights, torch.tensor([0.863, 0.985, 1.110, 1.043]), atol=0.001)
+
+
 def test_weighted_grade_mean_ignores_unsupervised_batches():
     assert RetinaUNetModule.weighted_grade_mean([1.6, 0.0], [3.2, 0.0]) == pytest.approx(1.6)
     assert np.mean([1.6, 0.0]) == pytest.approx(0.8)

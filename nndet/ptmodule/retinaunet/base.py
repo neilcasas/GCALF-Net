@@ -54,7 +54,7 @@ from nndet.arch.heads.comb import HeadType, DetectionHeadHNM
 from nndet.arch.heads.segmenter import SegmenterType, DiCESegmenter
 from nndet.arch.heads.grade_classifier import GradeAnchorFeatureExtractor, GradeClassifierHead
 from nndet.arch.encoder.gcalf.grade_head import GRADE_MAX, GRADE_MIN, GradeHead
-from nndet.io.load import load_pickle
+from nndet.io.load import load_pickle, save_json
 
 from nndet.training.optimizer import get_params_no_wd_on_norm
 from nndet.training.learning_rate import LinearWarmupPolyLR
@@ -172,31 +172,59 @@ class RetinaUNetModule(LightningBaseModuleSWA):
         )
 
     @staticmethod
-    def compute_grade_class_weights(dataset) -> torch.Tensor:
-        """Return mean-one inverse-frequency GGG2-5 weights for one train fold."""
-        counts = Counter()
-        for item in dataset.values():
-            properties = load_pickle(item["properties_file"])
-            grades = properties.get("grades", {})
-            supervised = properties.get("grade_supervised", {})
-            for instance_id, is_supervised in supervised.items():
-                if is_supervised:
-                    grade = int(grades[instance_id])
-                    if grade < GRADE_MIN or grade > GRADE_MAX:
-                        raise ValueError(f"Invalid grade {grade} in {item['properties_file']}")
-                    counts[grade] += 1
-        missing = [grade for grade in range(GRADE_MIN, GRADE_MAX + 1) if counts[grade] == 0]
+    def compute_grade_class_weights(dataset=None, anchor_class_counts=None) -> torch.Tensor:
+        """Return mean-one inverse-frequency weights from one declared prior.
+
+        The legacy ``lesion`` source counts supervised lesion metadata.  The
+        ``anchor`` source accepts counts measured after the positive-anchor
+        sampler, which is the distribution consumed by grade CE.  It is
+        deliberately explicit so a matrix run cannot silently infer a prior
+        from a different fold or sampling regime.
+        """
+        if anchor_class_counts is not None:
+            counts = torch.as_tensor(anchor_class_counts, dtype=torch.float64)
+            expected = GRADE_MAX - GRADE_MIN + 1
+            if counts.ndim != 1 or counts.numel() != expected:
+                raise ValueError(f"Expected {expected} anchor class counts for GGG2-5, got {counts.tolist()}")
+            if not torch.isfinite(counts).all() or torch.any(counts <= 0):
+                raise ValueError(f"Anchor class counts must be finite and positive, got {counts.tolist()}")
+        else:
+            if dataset is None:
+                raise ValueError("dataset is required when anchor_class_counts is not supplied")
+            lesion_counts = Counter()
+            for item in dataset.values():
+                properties = load_pickle(item["properties_file"])
+                grades = properties.get("grades", {})
+                supervised = properties.get("grade_supervised", {})
+                for instance_id, is_supervised in supervised.items():
+                    if is_supervised:
+                        grade = int(grades[instance_id])
+                        if grade < GRADE_MIN or grade > GRADE_MAX:
+                            raise ValueError(f"Invalid grade {grade} in {item['properties_file']}")
+                        lesion_counts[grade] += 1
+            counts = torch.tensor([lesion_counts[grade] for grade in range(GRADE_MIN, GRADE_MAX + 1)],
+                                  dtype=torch.float64)
+        missing = [grade for grade, count in zip(range(GRADE_MIN, GRADE_MAX + 1), counts) if count == 0]
         if missing:
             raise ValueError(f"Training fold has no grade-supervised lesions for GGG {missing}")
-        weights = torch.tensor([1.0 / counts[grade] for grade in range(GRADE_MIN, GRADE_MAX + 1)])
-        return weights / weights.mean()
+        weights = counts.reciprocal()
+        return (weights / weights.mean()).to(dtype=torch.float32)
 
     def on_fit_start(self) -> None:
-        """Freeze grade-loss weights from this fold's training partition only."""
+        """Freeze grade-loss weights from the protocol-declared train-fold prior."""
         if self.model.grade_head is not None:
-            weights = self.compute_grade_class_weights(self.trainer.datamodule.dataset_tr)
+            source = self.trainer_cfg.get("grade_class_weight_source", "lesion")
+            if source == "lesion":
+                weights = self.compute_grade_class_weights(self.trainer.datamodule.dataset_tr)
+            elif source == "anchor":
+                counts = self.trainer_cfg.get("grade_anchor_class_counts")
+                if counts is None:
+                    raise ValueError("grade_class_weight_source=anchor requires grade_anchor_class_counts")
+                weights = self.compute_grade_class_weights(anchor_class_counts=counts)
+            else:
+                raise ValueError(f"Unknown grade_class_weight_source: {source}")
             self.grade_class_weights.copy_(weights.to(self.grade_class_weights))
-            logger.info(f"Grade class weights for this fold: {self.grade_class_weights.tolist()}")
+            logger.info(f"Grade class weights ({source}) for this fold: {self.grade_class_weights.tolist()}")
         return super().on_fit_start()
 
     def training_step(self, batch, batch_idx):
@@ -343,11 +371,46 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                 else:
                     vals[_k].append(_v)
 
+        anchor_keys = {"grade_positive_anchors", "grade_supervised_anchors", "grade_unsupervised_anchors"}
+        anchor_keys.update(f"grade_anchor_count_GGG{grade}" for grade in range(GRADE_MIN, GRADE_MAX + 1))
+        anchor_totals = {}
         for _key, _vals in vals.items():
-            mean_val = self.weighted_grade_mean(_vals, vals["grade_loss_weight"]) if _key == "grade" else np.mean(_vals)
+            if _key in anchor_keys:
+                mean_val = float(np.sum(_vals))
+                anchor_totals[_key] = mean_val
+            else:
+                mean_val = self.weighted_grade_mean(_vals, vals["grade_loss_weight"]) if _key == "grade" else np.mean(_vals)
             if _key == "loss":
                 logger.info(f"Train loss reached: {mean_val:0.5f}")
             self.log(f"train_{_key}", mean_val, sync_dist=_key != "grade")
+        if anchor_totals:
+            totals = torch.tensor(
+                [anchor_totals[key] for key in sorted(anchor_totals)], dtype=torch.float64, device=self.device)
+            if torch.distributed.is_available() and torch.distributed.is_initialized():
+                torch.distributed.all_reduce(totals)
+            anchor_totals = dict(zip(sorted(anchor_totals), totals.cpu().tolist()))
+            if not torch.distributed.is_available() or not torch.distributed.is_initialized() \
+                    or torch.distributed.get_rank() == 0:
+                supervised = anchor_totals["grade_supervised_anchors"]
+                positive = anchor_totals["grade_positive_anchors"]
+                unsupervised = anchor_totals["grade_unsupervised_anchors"]
+                class_total = sum(anchor_totals[f"grade_anchor_count_GGG{grade}"]
+                                  for grade in range(GRADE_MIN, GRADE_MAX + 1))
+                if supervised + unsupervised != positive or class_total != supervised:
+                    raise RuntimeError("Grade-anchor telemetry does not reconcile with sampled positives")
+                record = {
+                    "epoch": int(self.current_epoch) + 1,
+                    "sampled_positive_anchors": int(positive),
+                    "sampled_supervised_anchors": int(supervised),
+                    "sampled_unsupervised_anchors": int(unsupervised),
+                    "sampled_supervised_fraction": supervised / positive if positive else 0.0,
+                    "class_counts": {
+                        f"GGG{grade}": int(anchor_totals[f"grade_anchor_count_GGG{grade}"])
+                        for grade in range(GRADE_MIN, GRADE_MAX + 1)
+                    },
+                }
+                save_json(record, Path.cwd() / "grade_anchor_counts.json")
+                logger.info(f"Sampled grade anchors: {record}")
         return super().training_epoch_end(training_step_outputs)
 
     def validation_epoch_end(self, validation_step_outputs):

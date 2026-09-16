@@ -55,6 +55,7 @@ class DataLoader3DFast(FixedSlimDataLoaderBase):
                  pad_mode: str = "constant",
                  pad_kwargs_data: Optional[Dict[str, Any]] = None,
                  num_batches_per_epoch: int = 2500,
+                 grade_balanced_sampling: bool = False,
                  ):
         """
         Basic Dataloder for 3D Data.
@@ -72,6 +73,9 @@ class DataLoader3DFast(FixedSlimDataLoaderBase):
             memmap_mode: Do not change this. Defaults to "r".
             pad_mode: Padding mode for data. Defaults to "constant".
             pad_kwargs_data: Addition kwargs for data padding. Defaults to None.
+            grade_balanced_sampling: For foreground slots, sample uniformly
+                among supervised GGG2--5 classes rather than uniformly among
+                lesions. Disabled by default to preserve non-GCALF tasks.
 
         Raises:
             ValueError: patch size of dataloder and final patch size need to
@@ -95,6 +99,7 @@ class DataLoader3DFast(FixedSlimDataLoaderBase):
 
         self.pad_mode = pad_mode
         self.pad_kwargs_data = pad_kwargs_data if pad_kwargs_data is not None else {}
+        self.grade_balanced_sampling = grade_balanced_sampling
 
         # we sample bigger patches and create a center crop during augmentation
         # to cover the boarders of the patient we need to adjust the position
@@ -142,14 +147,32 @@ class DataLoader3DFast(FixedSlimDataLoaderBase):
                 `instances`: list with tuple of (case_id, instance_id)
         """
         instance_cache = []
+        grade_cache = defaultdict(list)
 
         logger.info("Building Sampling Cache for Dataloder")
         for case_id, item in maybe_verbose_iterable(self._data.items(), desc="Sampling Cache"):
             instances = load_pickle(item['boxes_file'])["instances"]
             if instances:
+                properties = load_pickle(item['properties_file']) if self.grade_balanced_sampling else None
+                grades = properties.get("grades", {}) if properties is not None else {}
+                supervised = properties.get("grade_supervised", {}) if properties is not None else {}
                 for instance_id in instances:
                     instance_cache.append((case_id, instance_id))
-        return {"case": list(self._data.keys()), "instances": instance_cache}
+                    if self.grade_balanced_sampling and supervised.get(str(instance_id),
+                                                                        supervised.get(instance_id, False)):
+                        grade = grades.get(str(instance_id), grades.get(instance_id))
+                        if grade is None or int(grade) not in (2, 3, 4, 5):
+                            raise ValueError(
+                                f"{item['properties_file']}: supervised instance {instance_id} has invalid GGG {grade}"
+                            )
+                        grade_cache[int(grade)].append((case_id, instance_id))
+        if self.grade_balanced_sampling:
+            missing = [grade for grade in range(2, 6) if not grade_cache[grade]]
+            if missing:
+                raise ValueError(f"Grade-balanced sampling requires supervised GGG2-5; missing {missing}")
+            logger.info("Grade-balanced foreground cache: " + ", ".join(
+                f"GGG{grade}={len(grade_cache[grade])}" for grade in range(2, 6)))
+        return {"case": list(self._data.keys()), "instances": instance_cache, "grade_instances": grade_cache}
 
     def select(self) -> Tuple[List, List]:
         """
@@ -175,9 +198,16 @@ class DataLoader3DFast(FixedSlimDataLoaderBase):
                 selected_cases.append(np.random.choice(self.cache["case"]))
                 selected_instances.append(-1)
             else:
-                # sample fg / select an instance
-                idx = np.random.choice(range(len(self.cache["instances"])))
-                _case, _instance_id = self.cache["instances"][idx]
+                # sample fg / select an instance.  When enabled, first select
+                # a grade uniformly and then a supervised lesion within that
+                # grade; otherwise retain the legacy lesion-uniform draw.
+                if self.grade_balanced_sampling:
+                    grade = int(np.random.choice(range(2, 6)))
+                    candidates = self.cache["grade_instances"][grade]
+                else:
+                    candidates = self.cache["instances"]
+                idx = np.random.choice(range(len(candidates)))
+                _case, _instance_id = candidates[idx]
                 selected_cases.append(_case)
                 selected_instances.append(int(_instance_id))
         return selected_cases, selected_instances

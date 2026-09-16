@@ -296,7 +296,12 @@ def _train(
     checkpoint_cb.CHECKPOINT_NAME_LAST = 'model_last'
     callbacks.append(checkpoint_cb)
     grade_monitor_key = cfg["trainer_cfg"].get("grade_monitor_key")
-    if grade_monitor_key is not None:
+    grade_checkpoint = cfg["trainer_cfg"].get("grade_checkpoint", "monitor")
+    if grade_checkpoint not in ("monitor", "final", "post_swa"):
+        raise ValueError("trainer_cfg.grade_checkpoint must be monitor, final, or post_swa")
+    if grade_checkpoint == "post_swa" and not cfg["trainer_cfg"].get("swa_epochs", 0):
+        raise ValueError("grade_checkpoint=post_swa requires trainer_cfg.swa_epochs > 0")
+    if grade_checkpoint == "monitor" and grade_monitor_key is not None:
         grade_checkpoint_cb = ModelCheckpoint(
             dirpath=train_dir,
             filename='model_best_grade',
@@ -363,6 +368,20 @@ def _train(
         **trainer_kwargs
     )
     trainer.fit(module, datamodule=datamodule)
+
+    # A monitor near chance picks an arbitrary epoch. For the remediated
+    # protocol, save the trainer's final state after all callbacks complete:
+    # with SWA enabled this is the transferred post-SWA state. The historical
+    # filename remains stable for downstream checkpoint consumers.
+    if grade_checkpoint in ("final", "post_swa") and is_primary:
+        grade_checkpoint_path = train_dir / "model_best_grade.ckpt"
+        trainer.save_checkpoint(str(grade_checkpoint_path))
+        save_json({
+            "selection_rule": "post_swa_final_state" if grade_checkpoint == "post_swa" else "final_state",
+            "swa_epochs": int(cfg["trainer_cfg"].get("swa_epochs", 0)),
+            "checkpoint": grade_checkpoint_path.name,
+        }, train_dir / "grade_checkpoint_selection.json")
+        logger.info(f"Saved deterministic grade checkpoint: {grade_checkpoint_path}")
 
     if do_sweep and trainer.is_global_zero:
         case_ids = splits[cfg["exp"]["fold"]]["val"]
@@ -595,4 +614,12 @@ def _evaluate(
 
 
 if __name__ == "__main__":
+    # `MultiThreadedAugmenter` forks worker processes via the default multiprocessing
+    # context. When `augment_cfg.multiprocessing` is enabled, that fork happens after
+    # Lightning has already initialized a CUDA context on the main process (model
+    # placement precedes dataloader construction), which deadlocks every forked worker
+    # at 0% CPU indefinitely. `spawn` re-imports cleanly instead of forking a CUDA-bearing
+    # process and does not hang. DDP (`augment_cfg.multiprocessing: false`) is unaffected.
+    import multiprocessing as mp
+    mp.set_start_method("spawn", force=True)
     train()

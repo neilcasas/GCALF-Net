@@ -1,0 +1,13 @@
+# @package __global__
+defaults:
+  - gcalf_grade_pilot
+
+# Corrected Fix B′: grade-balanced foreground anchors with CE weights based on
+# the measured sampled-anchor prior, not the unbalanced lesion prior.
+trainer_cfg:
+  grade_class_weight_source: "anchor"
+  grade_anchor_class_counts: [30118, 26390, 23403, 24923]
+
+augment_cfg:
+  dataloader_kwargs:
+    grade_balanced_sampling: true

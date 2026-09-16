@@ -54,6 +54,14 @@ def test_grade_summary_has_four_by_four_confusion_and_weighted_f1():
     assert "grade_false_positives_per_case" not in summary
 
 
+def test_grade_summary_reports_quadratic_weighted_kappa():
+    perfect = summarize_grade_matches([2, 3, 4, 5], [2, 3, 4, 5], misses=0, false_positives=0)
+    imperfect = summarize_grade_matches([2, 3, 4, 5], [5, 4, 3, 2], misses=0, false_positives=0)
+
+    assert perfect["grade_quadratic_weighted_kappa"] == pytest.approx(1.0)
+    assert imperfect["grade_quadratic_weighted_kappa"] < 0.0
+
+
 def test_grade_summary_reports_a_per_case_rate_and_the_threshold_it_was_computed_at():
     summary = summarize_grade_matches([2, 3], [2, 3], misses=0, false_positives=4,
                                       num_cases=2, score_threshold=0.3)
