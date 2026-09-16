@@ -157,6 +157,40 @@ pilot remains diagnostic and is never pooled into CV.
    `scripts/record_m5_budget.py`; without that concrete record, folds 1--4 and
    the matrix remain blocked.
 
+## Remediation correction — 2026-09-16
+
+The original Fix B diagnostic is void as a test of grade-balanced sampling. Its
+configuration enabled balanced sampling but retained lesion-prior inverse-frequency
+CE weights: sampled anchors were GGG2/3/4/5 = 204/82/30/38 and the weights were
+`[0.2555, 0.6356, 1.7373, 1.3716]`. Effective emphasis was
+`[0.078, 0.165, 0.412, 0.345]` (5.3x max/min), versus the locked configuration's
+`[0.249, 0.242, 0.263, 0.247]` (1.09x). Fix B′ completes the authorized Fix B
+diagnostic with sampled-anchor counts `[30118, 26390, 23403, 24923]` and
+near-uniform weights `[0.863, 0.985, 1.110, 1.043]`.
+
+For item 5, the authoritative measurements are the whole-volume `run_eval`
+confusion-matrix columns and its `grade_balanced_accuracy`. The patch monitor's
+column emission is superseded. The former Fix B assessment substituted
+whole-volume 0.211 for the declared patch monitor (~0.26--0.29); both fail and
+the substitution is disclosed. Recover `val_cls` and the monitor from MLflow for
+the diagnostic and corresponding stopped-pilot arm.
+
+Fold 0 has 73 matched lesions (41/18/5/9); one GGG4 lesion moves balanced
+accuracy by 0.05 and approximate SE is 0.07. The >0.33 gate is not lowered, but
+near-threshold results are inconclusive; pooled five-fold CV is answerable. Fix
+C is closed: macro OvR AUROC 0.524 and the epoch 10--13 plateau provide no
+ranking signal, while item 3's both-diagnostics-failed condition was never met.
+
+Sec 2's selection wording is superseded by amendment item 1's deterministic
+`post_swa` snapshot. Stages 1--3 ran under D9 deviation in
+`/workspace/.conda/gcalf`, not pinned `gcalf:m0`. Correct the Stage 2 path to
+`evidence/stage2-anchor-20260916-v2.log`.
+
+The pre-Phase-5 real `do_seg=true` consequence is amended: no eligible trained
+segmentation prediction exists before the matrix. The first completed matrix arm
+must run `seg_metrics.py` on preserved `do_seg=true` predictions before its fold
+is counted in analysis; this timing amendment is explicit.
+
 ## Statistical Consequences
 
 Per Sec 1a, SOP 3's tests (Shapiro-Wilk then ANOVA/Tukey, or Friedman plus

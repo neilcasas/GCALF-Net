@@ -239,6 +239,12 @@ instance-hours and durable checkpoint storage. The fold-0 pilot measurement (Pha
 what triggers a step down the ladder — this decision fixes which rung is *planned*, not a
 license to skip the pilot.
 
+**2026-09-16 amendment.** The measured full projection is 514.5 GPU-hours,
+approximately $101 at four-concurrent pricing and about 5.4 days on four GPUs.
+This is accepted as the `full` rung despite exceeding the original 250--420
+GPU-hour range. The halved-batch ladder was considered and declined: shortening
+the schedule would further reduce exposure for an already data-limited grade head.
+
 ### D11 — Documentation and git hygiene
 
 - `pdhd-upstream` tag placed at `e2330cf` (2025-11-29, "Update README: Change architecture to C +

@@ -139,6 +139,11 @@ the thesis.
 grade confusion matrix (grade-supervised lesions only) with misses/FPs reported alongside,
 weighted F1, per-grade sensitivity; fold-0 measured seconds/step and wall time recorded.
 **Closes when.** Baseline metrics reported, commit tagged `baseline-v1`.
+
+**2026-09-16 ordering deviation.** M6/M7 validation already ran under the
+2026-09-08 ordering deviation before this closure record and tag were made.
+`baseline-v1` is intentionally not retroactively created; M4 remains disclosed
+as administratively open rather than silently blocking the matrix after M5.
 **Gate → M5.** Do not launch the 20-run matrix from this milestone's numbers alone — M5 decides
 the ladder rung first.
 

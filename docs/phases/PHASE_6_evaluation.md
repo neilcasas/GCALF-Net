@@ -38,8 +38,10 @@ Per matched positive detection, restricted to lesions with `grade_supervised: tr
 (`ARCHITECTURE.md §8`). `gcalf_eval/run_eval.py`:
 
 - **4×4 confusion matrix**, GGG2–5, over matched, grade-supervised lesions. The grade operating
-  point is fixed before the remediation pilot at `--grade-score-threshold 0.05`; it is never
-  selected by F1 or any held-out grade metric. Report **two numbers
+  point is fixed before the remediation pilot at `--grade-score-threshold 0.05`; it is a
+  protocol-fixed detection-score inclusion cutoff, selected neither by F1 nor a held-out grade
+  metric. It retains low-score candidates for sensitivity analysis; report its observed 9.01
+  grade false positives per case beside it. Report **two numbers
   beside it, not inside it**: missed lesions (unmatched grade-supervised ground truth, per grade)
   and false positives (unmatched detections, split by benign vs. positive case). State the
   matching criterion and score threshold used. Always report the grade-matched denominator next

@@ -115,8 +115,9 @@ python scripts/record_m5_budget.py \
   --rung full --output evidence/m5-budget-rung.json
 ```
 
-The M5 JSON, the off-instance grade metadata manifest, and a passing remediation
-pilot are launch prerequisites. Keep `grade_anchor_counts.json`,
+The M5 JSON, the off-instance grade metadata manifest, and a completed and
+adjudicated remediation pilot are launch prerequisites. A failing pilot restores
+the locked configuration and is reported as the pre-registered grade null. Keep `grade_anchor_counts.json`,
 `grade_checkpoint_selection.json`, resolved configs, and `grade_metrics.json`
 with the output evidence.
 
