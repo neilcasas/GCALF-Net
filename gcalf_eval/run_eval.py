@@ -14,6 +14,7 @@ from picai_eval import evaluate
 from scipy import ndimage
 
 from gcalf_eval.grade_metrics import lesion_instances, match_grade_predictions, summarize_grade_matches
+from gcalf_eval.grade_pilot import patient_id
 from gcalf_eval.seg_metrics import match_and_score_segmentation, summarize_segmentation_matches
 from nndet.io.load import load_pickle
 from nndet.io.paths import get_task, get_training_dir
@@ -197,7 +198,7 @@ def run_evaluation(
 
     detection_maps = []
     ground_truth_masks = []
-    grade_true, grade_predicted, grade_probabilities = [], [], []
+    grade_true, grade_predicted, grade_probabilities, grade_patients = [], [], [], []
     grade_misses = grade_false_positives = grade_matched_ungraded = 0
     has_grade_predictions = True
     # Segmentation predictions are a separate file per case (`{case_id}_seg.pkl`,
@@ -233,6 +234,7 @@ def run_evaluation(
             grade_true.extend(truth)
             grade_predicted.extend(predicted)
             grade_probabilities.extend(probabilities)
+            grade_patients.extend([patient_id(case_id)] * len(truth))
             grade_misses += misses
             grade_false_positives += false_positives
             grade_matched_ungraded += matched_ungraded
@@ -299,6 +301,16 @@ def run_evaluation(
     if has_grade_predictions:
         with (output_dir / "grade_metrics.json").open("w") as file:
             json.dump({key: value for key, value in row.items() if key.startswith("grade_")}, file, indent=2)
+        # Per-lesion arrays, aligned by index, for a patient-level paired
+        # bootstrap CI (gcalf_eval.grade_pilot.bootstrap_metrics) without
+        # re-running matching. grade_metrics.json only has the aggregate.
+        with (output_dir / "grade_matched_lesions.json").open("w") as file:
+            json.dump({
+                "grades": grade_true,
+                "predictions": grade_predicted,
+                "probabilities": grade_probabilities,
+                "patients": grade_patients,
+            }, file)
     if has_seg_predictions:
         with (output_dir / "seg_metrics.json").open("w") as file:
             json.dump({key: value for key, value in row.items() if key.startswith("seg_")}, file, indent=2)

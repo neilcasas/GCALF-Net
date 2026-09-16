@@ -217,3 +217,13 @@ def test_run_evaluation_with_grade_predictions_populates_grade_metrics_end_to_en
         csv_row = next(csv.DictReader(file))
     assert math.isfinite(float(csv_row["grade_false_positives_per_case"]))
     assert math.isfinite(float(csv_row["grade_score_threshold"]))
+
+    # gcalf_eval.grade_pilot.bootstrap_metrics resamples patients, so the
+    # per-lesion arrays it needs must be persisted alongside the aggregate
+    # metrics, aligned by index and tagged with each lesion's patient.
+    with (output / "grade_matched_lesions.json").open() as file:
+        matched = json.load(file)
+    assert matched["grades"] == [3]
+    assert matched["predictions"] == [3]
+    assert matched["probabilities"] == [[0.0, 1.0, 0.0, 0.0]]
+    assert matched["patients"] == ["positive"]
