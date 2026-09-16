@@ -92,9 +92,13 @@ def check_resolved_config(train_dir, problems):
 
 
 def check_detection_metric(train_dir, problems):
-    scores_path = train_dir / "val_results" / "boxes" / "results_boxes.json"
+    # scripts/train.py's `_evaluate` writes `save_metric_output(scores, curves, save_dir,
+    # "results_boxes")` with `save_dir = training_dir / "val_results"` -- the "boxes"
+    # subdirectory it also passes to `evaluate_box_dir` holds only plots (FROC.png etc.),
+    # not this JSON.
+    scores_path = train_dir / "val_results" / "results_boxes.json"
     if not scores_path.is_file():
-        _fail(problems, "missing val_results/boxes/results_boxes.json")
+        _fail(problems, "missing val_results/results_boxes.json")
         return
     scores = json.loads(scores_path.read_text())
     map_keys = [key for key in scores if key.startswith("mAP_IoU_")]
