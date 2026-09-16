@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -49,20 +51,18 @@ def test_validation_loader_disables_grade_balanced_sampling(monkeypatch):
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    module = bg_module.Datamodule.__new__(bg_module.Datamodule)
-    module.dataloader = "test"
-    module.dataloader_kwargs = {"grade_balanced_sampling": True, "other": "kept"}
-    module.dataset_val = {}
-    module.batch_size = 1
-    module.patch_size = (1, 1, 1)
-    module.augment_cfg = {"oversample_foreground_percent": 0.0, "num_val_batches_per_epoch": 1,
-                          "num_threads": 1, "multiprocessing": False}
-    module.augmentation = type("Augmentation", (), {"get_validation_transforms": lambda self: None})()
-    module._augmenter_seeds = lambda stream: []
+    module = SimpleNamespace(
+        dataloader="test", dataloader_kwargs={"grade_balanced_sampling": True, "other": "kept"},
+        dataset_val={}, batch_size=1, patch_size=(1, 1, 1),
+        augment_cfg={"oversample_foreground_percent": 0.0, "num_val_batches_per_epoch": 1,
+                     "num_threads": 1, "multiprocessing": False},
+        augmentation=type("Augmentation", (), {"get_validation_transforms": lambda self: None})(),
+        _augmenter_seeds=lambda stream: [],
+    )
     monkeypatch.setattr(bg_module.DATALOADER_REGISTRY, "get", lambda _: Loader)
     monkeypatch.setattr(bg_module, "get_augmenter", lambda dataloader, **_: dataloader)
 
-    module.val_dataloader()
+    bg_module.Datamodule.val_dataloader(module)
 
     assert captured["grade_balanced_sampling"] is False
     assert captured["other"] == "kept"
