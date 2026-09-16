@@ -16,7 +16,9 @@ heads:
   cases — 424 positives (any lesion with a positive spatial mask, graded or not) and 1,075
   negatives (benign + GGG1). The source cohort has one declared exclusion.
 - **A separate 4-logit grade head**, trained only on lesions with a resolved GGG2–5 grade
-  (masked elsewhere). Of the 424 retained positives, 340 carry grade supervision. The remaining
+  (masked elsewhere). The canonical D3-rev.2 metadata has 441 grade-supervised lesions. The checked-in
+  `det_data/` working tree is known stale at 340 and must not be used for a remediation or matrix run
+  until it is restored from the off-instance-verified canonical backup. The remaining
   118 positive instances are grade-unsupervised.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
@@ -42,7 +44,7 @@ repository:
 export det_data=/path/to/nnDet_raw
 export det_models=/path/to/nnDet_models
 export OMP_NUM_THREADS=8
-export det_num_threads=8
+export det_num_threads=16
 ```
 
 Install the pinned auxiliary tools from [requirements-tools.txt](requirements-tools.txt) and the

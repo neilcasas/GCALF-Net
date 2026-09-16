@@ -155,6 +155,26 @@ before any fold-1–4 result exists, not test-set tuning. Record the selected pr
 (full / halved batches-per-epoch, all runs / 14-run reduced) in every subsequent `run.json`.
 **Closes when.** The rung is recorded and unanimous across all subsequent run configs.
 
+**2026-09-15 remediation guard.** The record is written by
+`scripts/record_m5_budget.py` from the single-GPU multiprocessing measurement;
+it is not satisfied by the stopped debug-loader pilot. Until the immutable JSON
+record exists, folds 1--4 and the 20-run matrix remain blocked.
+
+**2026-09-16 closed.** `evidence/m5-budget-rung.json` records the fold-0
+solo and four-concurrent measurement for all four arms (baseline, lff, caf,
+full) after the multiprocessing/spawn fix (see AGENTS.md-adjacent evidence
+under `evidence/stage1-mp16-*-20260915/` for the fork-after-CUDA-init hang
+this fix resolves). Measured contention factor: 1.072x. Projected full
+20-run matrix: **514.5 GPU-hours** (~$100.90 at four-concurrent, ~$403.60
+serialized, at the $0.7844/GPU-hr rate measured on the instance) — **above**
+ADR 0002 D10's pre-registered 250–420 GPU-hour range for the `full` rung,
+though still inside the $150–350 dollar budget. Per explicit decision, the
+`full` rung is recorded anyway rather than stepping down the ADR 0001 A5
+ladder (halved batches-per-epoch or the 14-run reduced matrix), with this
+overage disclosed rather than silently absorbed. Folds 1–4 and the 20-run
+matrix are unblocked by this record, independent of the still-open Stage
+2/3 grade-remediation gate in ADR 0003.
+
 ## M6 — LFF
 
 **Goal.** `LearnableFrequencyFilter3D` replaces the single input-level FDSF module via the

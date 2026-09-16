@@ -51,7 +51,7 @@ GCALF_CONDA_ENV=/workspace/.conda/gcalf bash cloud/vast/bootstrap.sh --repo-dir 
 export det_data=/workspace/det_data
 export det_models=/workspace/det_models
 export OMP_NUM_THREADS=8
-export det_num_threads=8
+export det_num_threads=16
 GCALF_CONDA_ENV=/workspace/.conda/gcalf bash cloud/vast/run_milestones.sh --repo-dir "$PWD" --workspace /workspace
 ```
 
@@ -78,6 +78,47 @@ M2 preserves its initial/final loss, duration, loss components, and peak GPU mem
 `evidence/m2/overfit.log`. M3 creates a new `Task900_PICAI_TINY` by default. If it fails, retain the
 partial task and model output for diagnosis; retry with `--m3-task Task901_PICAI_TINY` (or another
 unused `Task9xx_PICAI_TINY` identifier). No script deletes a partial task.
+
+## Grade-remediation pre-launch sequence
+
+Do not launch the five-fold matrix from the debug-loader pilot. First pull the
+canonical labels to durable local storage and require its checksum manifest to
+pass (run this from the local controller, not the instance):
+
+```bash
+cloud/vast/pull_grade_metadata.sh --instance-id "$INSTANCE_ID" \
+  --destination ./gcalf-grade-metadata-20260915
+```
+
+On the instance, use fresh tags for the throughput and anchor-prior diagnostics.
+The helper refuses a reused output tree, runs only one GPU, enables multiprocessing,
+and uses 16 augmentation workers by default:
+
+```bash
+cd /workspace/GCALF-Net
+export det_data=/workspace/det_data det_models=/workspace/det_models
+cloud/vast/run_grade_remediation.sh --task Task2201_PICAI_csPCa \
+  --stage throughput --tag mp16 --fold 0
+cloud/vast/run_grade_remediation.sh --task Task2201_PICAI_csPCa \
+  --stage anchor --tag anchor-prior --fold 0
+```
+
+Use the four `class_counts` from the resulting `grade_anchor_counts.json` for
+Fix A. Run Fix B only when Fix A fails the committed class-emission, balanced
+accuracy, mAP, and `val_cls` gates in ADR 0003; these pilots are not CV folds.
+Only after the measured per-arm timings exist may M5 be recorded, for example:
+
+```bash
+python scripts/record_m5_budget.py \
+  --arm baseline=SECONDS --arm lff=SECONDS --arm caf=SECONDS --arm full=SECONDS \
+  --contention-factor FACTOR --hourly-instance-cost DOLLARS_PER_INSTANCE_HOUR \
+  --rung full --output evidence/m5-budget-rung.json
+```
+
+The M5 JSON, the off-instance grade metadata manifest, and a passing remediation
+pilot are launch prerequisites. Keep `grade_anchor_counts.json`,
+`grade_checkpoint_selection.json`, resolved configs, and `grade_metrics.json`
+with the output evidence.
 
 ## Four-GPU training gate and run map
 

@@ -95,16 +95,67 @@ Phase 6 reported number.
    being implied by absence. This satisfies Sec 5's requirement that the value be
    committed before Phase 5.
 
-   Rationale. The grade head is data-limited, not under-regularized: training
-   cross-entropy reaches only 1.11 against a uniform-prediction value of
-   ln(4)=1.386, and the pre-`d9d1159` 12.83M-parameter head memorized to 0.15
-   while generalizing *worse* (best validation CE 1.137-1.166 versus 1.248-1.273
-   for the current 1.33M head). Freezing a branch that is already near chance has
-   little expected effect on the shared backbone. Leaving it disabled keeps the
-   training protocol byte-identical to the existing `_c2_` fold-0 runs, removing
-   one moving part from a matrix whose primary endpoints are now detection and
-   segmentation. `GradeHeadFreezeCallback` remains in the codebase, tested and
-   unused, available without an ADR change if later evidence warrants it.
+   Rationale. `freeze_grade_head` only disables gradients for grade-head
+   parameters. The grade loss remains in the summed multitask objective, so its
+   gradients still pass through the frozen branch's differentiable operations
+   into the shared FPN and encoder. `.eval()` changes neither GroupNorm nor a
+   dropout layer here. It therefore does not provide the asserted backbone
+   protection and is irreversible for the rest of a run. Leaving it disabled is
+   the only supported protocol state; `GradeHeadFreezeCallback` remains tested
+   but unused unless its implementation is changed and separately validated.
+
+## Remediation amendment — 2026-09-15
+
+The stopped four-arm grade pilot demonstrated degenerate class non-emission:
+every arm omitted at least one GGG class and GGG4 was emitted only three times
+across the matched lesions. This is not a reportable low-accuracy result. The
+following amendment applies before any fresh fold-0 or matrix run; the stopped
+pilot remains diagnostic and is never pooled into CV.
+
+1. `model_best_grade` is a deterministic final snapshot, not an argmax over
+   `val_grade_balanced_accuracy`. For a scheduled 50+10 run it is written after
+   the ten-epoch SWA callback has completed (`grade_checkpoint: post_swa`); the
+   13-epoch remediation diagnostic has `swa_epochs: 0` and records its final
+   state (`grade_checkpoint: final`). `model_best` remains the detection-mAP
+   selection. The old balanced-accuracy monitor is logged only for diagnosis.
+2. The training module writes a `grade_anchor_counts.json` record (the latest
+   completed epoch), counting only grade-supervised anchors *after*
+   detection-positive subsampling. Fix A
+   may use those four recorded counts as mean-one inverse-frequency CE weights
+   through `grade_class_weight_source: anchor` and explicit
+   `grade_anchor_class_counts`; it must not reuse lesion counts as an anchor
+   proxy. The default remains the old lesion prior until this evidence exists.
+3. If Fix A fails, `gcalf_grade_remediation` enables Fix B, uniform GGG2--5
+   sampling among supervised foreground lesions. It is a fresh 13-epoch,
+   fold-0-only diagnostic. Fix C (ordinal loss) is not authorized unless both
+   preceding diagnostics fail their gate.
+
+   **2026-09-16 deviation.** Fix A's pilot was not run. Stage 2's measured
+   sampled-anchor distribution (`GGG2/3/4/5` = 58156/23248/8991/10725,
+   `evidence/stage2-anchor-20260916-v2/train.log`) is within 2--5% of the
+   existing lesion-based prior at every class (anchor weights
+   `[0.260, 0.650, 1.681, 1.409]` vs. lesion weights
+   `[0.256, 0.622, 1.747, 1.376]`) -- Fix A's premise, that the CE sees a
+   materially different class prior than lesion counts imply, does not hold
+   under measurement. Proceeding directly to Fix B on this evidence, by
+   explicit decision, rather than running a pilot predicted to reproduce the
+   locked configuration's failure. This is a disclosed protocol deviation,
+   not a silent skip.
+4. The grade operating point is fixed at `--grade-score-threshold 0.05` before
+   the diagnostics. It is a score cutoff, not an F1-optimised threshold; all
+   folds use it and report false positives per case at that cutoff.
+5. A remediation diagnostic passes only when its grade confusion-matrix
+   **columns** emit every GGG2--5 class at least once, its selected epoch has
+   `val_grade_balanced_accuracy > 0.33`, mAP changes by no more than 0.02, and
+   `val_cls` changes by no more than 0.005 versus its corresponding stopped-pilot
+   arm. Failure restores the locked configuration and is reported as a null.
+6. The canonical `raw_splitted/labelsTr` metadata must be copied off-instance
+   and pass `scripts/audit_grade_metadata.py` before any data-changing recovery:
+   exactly 441 supervised lesions, 17 heterogeneous/unsupervised lesions, and
+   GGG2/3/4/5 = 253/104/37/47. The M5 record is produced only after the
+   single-GPU multiprocessing throughput measurement by
+   `scripts/record_m5_budget.py`; without that concrete record, folds 1--4 and
+   the matrix remain blocked.
 
 ## Statistical Consequences
 
