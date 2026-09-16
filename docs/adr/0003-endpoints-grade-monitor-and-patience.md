@@ -191,6 +191,39 @@ segmentation prediction exists before the matrix. The first completed matrix arm
 must run `seg_metrics.py` on preserved `do_seg=true` predictions before its fold
 is counted in analysis; this timing amendment is explicit.
 
+## Fix B′ adjudication rule — 2026-09-16, declared before the result
+
+Fix B′ is a fold-0-only diagnostic. Per the Statistical Consequences section,
+pooling five folds narrows the confidence interval around the same underlying
+value rather than raising it -- no number of additional folds rescues a
+near-chance fold-0 result -- so this rule is committed now, using only the
+confounded Fix B run's numbers (macro OvR AUROC 0.524) and Stage 2/3's
+measured lesion counts, before Fix B′'s 13 epochs (3 of 13 complete at the
+time of this entry) produce a result.
+
+Compute macro one-vs-rest AUROC on Fix B′'s matched validation lesions via
+`python -m gcalf_eval.run_eval`, then a patient-level bootstrap 95% CI via
+`gcalf_eval.grade_pilot.bootstrap_metrics` over the `grade_matched_lesions.json`
+it persists (`grades`, `predictions`, `probabilities`, `patients`; 2000
+resamples, seed 2026 -- the function's own defaults).
+
+- CI lower bound `<= 0.5`: no ranking signal recovered. Launch the matrix on
+  the locked configuration; report grade as the pre-registered null per the
+  Statistical Consequences section.
+- Macro AUROC `>= 0.70` **and** CI lower bound `> 0.5`: real, literature-
+  standard ("acceptable discrimination", Hosmer--Lemeshow) signal recovered.
+  Do not launch on the locked configuration without a separate, explicit ADR
+  amendment weighing whether to adopt Fix B′'s configuration for the matrix.
+- Otherwise: inconclusive at n=1 fold. Launch the matrix on the locked
+  configuration; report both the point estimate and the CI, explicitly
+  labeled inconclusive, alongside the null.
+
+0.70 is the conventional floor for "acceptable" discrimination, not the CI's
+own implied minimum (approximately 0.60, given the confounded run's measured
+SE of approximately 0.05 at this sample size): a pass requires a materially
+larger effect than bare statistical significance, not just a result
+distinguishable from chance.
+
 ## Statistical Consequences
 
 Per Sec 1a, SOP 3's tests (Shapiro-Wilk then ANOVA/Tukey, or Friedman plus
