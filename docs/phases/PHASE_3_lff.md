@@ -53,7 +53,7 @@ class LearnableFrequencyFilter3D(nn.Module):
 
     def forward(self, x):
         input_dtype = x.dtype
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             spectrum = torch.fft.rfftn(x.float(), dim=(-3, -2, -1), norm="ortho")
             base = spherical_mask_rfft(x.shape[-3:], self.radius,
                                        device=x.device)         # FDSF's M, centered on D,H
@@ -85,7 +85,7 @@ class LearnableFrequencyFilter3D(nn.Module):
 Notes on the implementation above, to validate rather than assume: `align_corners=True` puts the
 extreme grid values on DC and Nyquist — for even `D`/`H` the grid centre lands within half a bin
 of the `ifftshift` DC position; confirm on a radial response plot rather than assuming. Complex ×
-real broadcasting, `ifftshift`, and `irfftn` all exist in the pinned PyTorch 1.10 image — verify
+real broadcasting, `ifftshift`, and `irfftn` all exist in the target PyTorch 2.7.1 image — verify
 in the container anyway.
 
 ## 3.2 Registry integration

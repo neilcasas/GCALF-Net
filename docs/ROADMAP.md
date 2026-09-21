@@ -2,13 +2,15 @@
 
 `ARCHITECTURE.md` says *what* GCALF-Net is and *why*. This file says *when it is done*: the
 architecture split into milestones, each with one goal and one test that decides pass/fail. The
-step-by-step *how* is in `phases/PHASE_*.md`.
+step-by-step *how* is in `phases/PHASE_*.md`. ADR 0004 records the pre-matrix CUDA/toolchain
+migration.
 
 **Rules.** Milestones are sequential; M4 (built baseline, full train) and M5 (the fold-0 budget
 decision) must close before M6 (LFF) or M7 (CAF) starts. A milestone closes only when its test runs and passes — not when the code
-"looks right." Every gate below is tagged **L** (runs in the pinned `gcalf:m0` image, CPU-only) or
+"looks right." Every gate below is tagged **L** (runs in the authoritative `gcalf:m1` image) or
 **V** (requires a GPU — Vast.ai). No **V** gate is evidence for a milestone whose **L** gate has
-not passed. See `docs/adr/0002-*.md` for why each milestone is shaped this way.
+not passed. See `docs/adr/0002-*.md` and `docs/adr/0004-blackwell-toolchain.md` for why each
+milestone is shaped this way.
 
 | M | Milestone | Phase | Goal | Gates |
 |---|---|---|---|---|
@@ -29,10 +31,9 @@ not passed. See `docs/adr/0002-*.md` for why each milestone is shaped this way.
 
 ## M0 — Environment
 
-**Goal.** Two environments per `ARCHITECTURE.md §12`: the pinned `gcalf:m0` image (Python 3.8,
-torch 1.10.1/CUDA 11.3, `nndet` `csrc` compiled) where every reported result must reproduce, and a
-disposable modern-CUDA scratch environment for LFF/CAF math prototyping on the local GPU. Neither
-substitutes for the other.
+**Goal.** The authoritative `gcalf:m1` image (Python 3.11, torch 2.7.1/CUDA 12.8, `nndet` `csrc`
+compiled) is used for every reported result. The local RTX 4050 can run the CUDA extension smoke
+test, while its 6 GB VRAM still excludes full training.
 
 **L gate.**
 ```bash
@@ -42,10 +43,10 @@ python -c "import picai_prep, picai_eval, medcam"
 ```
 **V gate.**
 ```bash
-docker run --rm --gpus all gcalf:m0 python -m pytest -q tests/test_csrc_cuda.py   # must run, not skip
+docker run --rm --gpus all gcalf:m1 python -m pytest -q tests/test_csrc_cuda.py   # must run, not skip
 ```
-This gate passed on 2026-09-05; see `docs/m0-verification.md` for the mounted-checkout command and
-the historical CDI failure it supersedes. Re-run it after rebuilding the image or extension.
+The legacy `gcalf:m0` record is preserved in `docs/m0-verification.md`; rerun this gate after
+building `gcalf:m1` and record its image digest before treating M0 as closed for this stack.
 **Blocks.** Everything. `csrc` is the #1 historical blocker — do not start M1 with a half-working env.
 
 ## M1 — Data pipeline

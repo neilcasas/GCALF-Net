@@ -35,7 +35,7 @@ class FrequencyDomainSeparationAndShunting3D(nn.Module):
 
     def forward(self, x):
         input_dtype = x.dtype
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             X = torch.fft.fftshift(torch.fft.fftn(x.float(), dim=(-3, -2, -1)), dim=(-3, -2, -1))
             mask = self._radial_mask(X.shape[-3:], self.radius, device=X.device)
             X_low, X_high = X * mask, X * (1 - mask)

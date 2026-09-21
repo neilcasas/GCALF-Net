@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, Optional, Sequence, Hashable, Type, Type
 
 import torch
 import pytorch_lightning as pl
-from pytorch_lightning.core.memory import ModelSummary
+from pytorch_lightning.utilities.model_summary import ModelSummary
 from loguru import logger
 
 from nndet.io.load import save_txt
@@ -64,6 +64,8 @@ class LightningBaseModule(pl.LightningModule):
 
         self.epoch_start_tic = 0
         self.epoch_end_toc = 0
+        self.training_step_outputs = []
+        self.validation_step_outputs = []
 
     @property
     def max_epochs(self):
@@ -72,21 +74,21 @@ class LightningBaseModule(pl.LightningModule):
         """
         return self.trainer_cfg["max_num_epochs"]
 
-    def on_epoch_start(self) -> None:
+    def on_train_epoch_start(self) -> None:
         """
         Save time
         """
         self.epoch_start_tic = time()
-        return super().on_epoch_start()
+        return super().on_train_epoch_start()
     
-    def validation_epoch_end(self, validation_step_outputs):
+    def on_validation_epoch_end(self) -> None:
         """
         Print time of epoch
         (needed for cluster where progress bar is deactivated)
         """
         self.epoch_end_toc = time()
         logger.info(f"This epoch took {int(self.epoch_end_toc - self.epoch_start_tic)} s")
-        return super().validation_epoch_end(validation_step_outputs)
+        return super().on_validation_epoch_end()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """

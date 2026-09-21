@@ -35,7 +35,7 @@ exists in the released code today — both must be built ([Phase 2](docs/phases/
 
 ## Environment
 
-The authoritative runtime is the CUDA 11.3/PyTorch 1.10.1 environment in
+The authoritative runtime is the CUDA 12.8/PyTorch 2.7.1 environment in
 [environment.yml](environment.yml). It must successfully import `nndet._C`, `picai_prep`,
 `picai_eval`, and `medcam` before data preparation. Set the nnDetection locations outside the
 repository:
@@ -48,9 +48,10 @@ export det_num_threads=16
 ```
 
 Install the pinned auxiliary tools from [requirements-tools.txt](requirements-tools.txt) and the
-local package only after a compatible PyTorch build is installed. See
-[Phase 0](docs/phases/PHASE_0_environment.md) for the complete environment gate, including why
-local development is CPU-only and where a separate modern-CUDA scratch environment fits.
+local package only after the target PyTorch build is installed. The CUDA 12.8 toolchain targets
+Ampere, Ada, Hopper, and Blackwell (`sm_120`); the local RTX 4050 can now exercise the extension,
+although its 6 GB memory is insufficient for a real training run. See
+[Phase 0](docs/phases/PHASE_0_environment.md) for the environment gate and GPU limits.
 
 ## PI-CAI task preparation
 

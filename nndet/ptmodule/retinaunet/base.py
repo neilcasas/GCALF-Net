@@ -250,9 +250,11 @@ class RetinaUNetModule(LightningBaseModuleSWA):
         )
         loss = sum(losses.values())
         grade_supervised_lesions = sum(int(m.sum()) for m in batch["grade_supervised"])
-        return {"loss": loss, "grade_supervised_lesions": grade_supervised_lesions,
-                **{key: l.detach().item() for key, l in losses.items()},
-                **{key: value.detach().item() for key, value in log_scalars.items()}}
+        output = {"loss": loss, "grade_supervised_lesions": grade_supervised_lesions,
+                  **{key: l.detach().item() for key, l in losses.items()},
+                  **{key: value.detach().item() for key, value in log_scalars.items()}}
+        self.training_step_outputs.append({**output, "loss": loss.detach()})
+        return output
 
     def validation_step(self, batch, batch_idx):
         """
@@ -280,9 +282,11 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             grade_supervised_lesions = sum(int(m.sum()) for m in batch["grade_supervised"])
 
         self.evaluation_step(prediction=prediction, targets=targets)
-        return {"loss": loss.detach().item(), "grade_supervised_lesions": grade_supervised_lesions,
-                **{key: l.detach().item() for key, l in losses.items()},
-                **{key: value.detach().item() for key, value in log_scalars.items()}}
+        output = {"loss": loss.detach().item(), "grade_supervised_lesions": grade_supervised_lesions,
+                  **{key: l.detach().item() for key, l in losses.items()},
+                  **{key: value.detach().item() for key, value in log_scalars.items()}}
+        self.validation_step_outputs.append(output)
+        return output
 
     def evaluation_step(
         self,
@@ -358,13 +362,13 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             numerator, denominator = totals.tolist()
         return numerator / denominator if denominator else float("inf")
 
-    def training_epoch_end(self, training_step_outputs):
+    def on_train_epoch_end(self):
         """
         Log train loss to loguru logger
         """
         # process and log losses
         vals = defaultdict(list)
-        for _val in training_step_outputs:
+        for _val in self.training_step_outputs:
             for _k, _v in _val.items():
                 if _k == "loss":
                     vals[_k].append(_v.detach().item())
@@ -411,15 +415,15 @@ class RetinaUNetModule(LightningBaseModuleSWA):
                 }
                 save_json(record, Path.cwd() / "grade_anchor_counts.json")
                 logger.info(f"Sampled grade anchors: {record}")
-        return super().training_epoch_end(training_step_outputs)
+        self.training_step_outputs.clear()
 
-    def validation_epoch_end(self, validation_step_outputs):
+    def on_validation_epoch_end(self):
         """
         Log val loss to loguru logger
         """
         # process and log losses
         vals = defaultdict(list)
-        for _val in validation_step_outputs:
+        for _val in self.validation_step_outputs:
             for _k, _v in _val.items():
                 vals[_k].append(_v)
 
@@ -431,7 +435,8 @@ class RetinaUNetModule(LightningBaseModuleSWA):
 
         # process and log metrics
         self.evaluation_end()
-        return super().validation_epoch_end(validation_step_outputs)
+        self.validation_step_outputs.clear()
+        return super().on_validation_epoch_end()
 
     def _merge_distributed_evaluators(self) -> None:
         """Collect rank-local validation caches before nonlinear metric calculation."""

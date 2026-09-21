@@ -27,7 +27,7 @@ import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import MLFlowLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from pytorch_lightning.plugins import DDPPlugin
+from pytorch_lightning.strategies import DDPStrategy
 
 from loguru import logger
 from hydra import initialize_config_module
@@ -253,10 +253,10 @@ def _train(
 
     data_dir = Path(cfg.host["preprocessed_output_dir"]) / plan["data_identifier"] / "imagesTr"
 
-    num_gpus = int(cfg["trainer_cfg"]["gpus"])
-    accelerator = cfg["trainer_cfg"]["accelerator"]
+    num_gpus = int(cfg["trainer_cfg"]["devices"])
+    strategy = cfg["trainer_cfg"]["strategy"]
     augment_cfg = OmegaConf.to_container(cfg["augment_cfg"], resolve=True)
-    if accelerator == "ddp":
+    if strategy == "ddp":
         if num_gpus < 2:
             raise ValueError("DDP requires at least two GPUs")
         global_batch_size = int(plan["batch_size"])
@@ -330,44 +330,36 @@ def _train(
     if is_primary:
         save_pickle(splits, train_dir / "splits.pkl")
 
-    trainer_kwargs = {}
+    ckpt_path = None
     if cfg["train"]["mode"].lower() == "resume":
-        trainer_kwargs["resume_from_checkpoint"] = train_dir / "model_last.ckpt"
+        ckpt_path = train_dir / "model_last.ckpt"
 
     logger.info(f"Using {num_gpus} GPUs for training")
-    plugins = cfg["trainer_cfg"].get("plugins", None)
-    if accelerator == "ddp":
-        if plugins is not None:
-            raise ValueError("DDP plugin is controlled by train.py; remove trainer_cfg.plugins")
-        plugins = DDPPlugin(find_unused_parameters=True)
+    trainer_strategy = strategy
+    if strategy == "ddp":
+        trainer_strategy = DDPStrategy(find_unused_parameters=True)
         # Lightning respawns this script after ``init_train_dir`` has changed
         # the working directory to the model output folder.  Keep the entry
         # point absolute so child ranks do not look for ``scripts/train.py``
         # below that output folder.
         sys.argv[0] = str(SCRIPT_PATH)
-    logger.info(f"Using {plugins} plugins for training")
+    logger.info(f"Using {trainer_strategy} strategy for training")
 
     trainer = pl.Trainer(
-        gpus=list(range(num_gpus)) if num_gpus > 1 else num_gpus,
-        accelerator=accelerator,
+        accelerator="gpu",
+        devices=num_gpus,
+        strategy=trainer_strategy,
         precision=cfg["trainer_cfg"]["precision"],
-        amp_backend=cfg["trainer_cfg"]["amp_backend"],
-        amp_level=cfg["trainer_cfg"]["amp_level"],
         benchmark=cfg["trainer_cfg"]["benchmark"],
         deterministic=cfg["trainer_cfg"]["deterministic"],
         callbacks=callbacks,
         logger=pl_logger,
         max_epochs=module.max_epochs,
-        progress_bar_refresh_rate=None if bool(int(os.getenv("det_verbose", 1))) else 0,
-        reload_dataloaders_every_epoch=False,
+        enable_progress_bar=bool(int(os.getenv("det_verbose", 1))),
+        reload_dataloaders_every_n_epochs=0,
         num_sanity_val_steps=10,
-        weights_summary='full',
-        plugins=plugins,
-        terminate_on_nan=True,  # TODO: make modular
-        move_metrics_to_cpu=False,
-        **trainer_kwargs
     )
-    trainer.fit(module, datamodule=datamodule)
+    trainer.fit(module, datamodule=datamodule, ckpt_path=ckpt_path)
 
     # A monitor near chance picks an arbitrary epoch. For the remediated
     # protocol, save the trainer's final state after all callbacks complete:

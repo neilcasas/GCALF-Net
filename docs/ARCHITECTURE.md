@@ -47,9 +47,10 @@ FDSF), CAF (new, built on WAF). Budget for five new modules, not two `ModuleList
 | **picai_labels** | Data. | `clinical_information/marksheet.csv`, `csPCa_lesion_delineations/`, `anatomical_delineations/whole_gland/`. |
 | **picai_baseline** | Reference recipe. | Follow `nndetection_baseline.md` for the PI-CAI → nnDetection conversion steps. |
 
-**Environment anchor:** PDHD-Net's `requirements.txt` pins a 2021-era stack
-(`pytorch_lightning<=1.4.2`, `nnunet==1.7.1`, `SimpleITK<2.1.0`) → torch ~1.10/CUDA 11.3. This is
-fixed; do not modernize it mid-thesis (it would confound baseline-vs-GCALF attribution — ADR 0001).
+**Environment anchor:** the thesis runtime uses the minimum modern stack that emits the required
+Blackwell `sm_120` binary: Python 3.11, PyTorch 2.7.1/CUDA 12.8, and PyTorch Lightning 2.5.x.
+`nnunet==1.7.1` and `numpy<2` remain deliberately constrained. ADR 0004 records why this change
+landed before the official matrix and supersedes ADR 0001's legacy-runtime freeze.
 GFNet/TransFuse/UCTransNet/DCA classes are copied in, never `pip install`ed. Z-SSMNet is read-only.
 
 ---
@@ -263,7 +264,7 @@ before both branches of the five-level encoder. It does not replace stage-local 
 6. Route `X_low` toward the Swin branch and `X_high` toward the CNN branch, exactly as specified by
    the paper. This direction is fixed across all baseline and ablation runs.
 
-Run FFT in fp32 (`torch.cuda.amp.autocast(enabled=False)` around the FFT block, as in GFNet).
+Run FFT in fp32 (`torch.amp.autocast("cuda", enabled=False)` around the FFT block, as in GFNet).
 
 **Unit tests:** mask radius is exact at the boundary; `X_low + X_high` reconstructs `X` (aliasing-
 free split); shape preserved for odd/even `(D,H,W)`; a constant input passes almost entirely
@@ -323,7 +324,7 @@ class LearnableFrequencyFilter3D(nn.Module):
 
     def forward(self, x):
         input_dtype = x.dtype
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             spectrum = torch.fft.rfftn(x.float(), dim=(-3, -2, -1), norm="ortho")
             # centered on D,H; monotonic DC->Nyquist on the trailing rFFT axis (§6 bullet 1)
             base = spherical_mask_rfft(x.shape[-3:], self.radius,
@@ -511,23 +512,22 @@ GGG2–5-stratified, 3-urologist PI-RADS v2 Likert review.
 ## 12. Local testing / development
 
 **Two environments, never merged (ADR 0002 D9):**
-1. **`gcalf:m0`, pinned, CPU-only.** Every gate whose result must match what gets reported: unit
+1. **`gcalf:m1`, authoritative.** Every gate whose result must match what gets reported: unit
    tests, config parsing, module-selection assertions, manifest/fold validation, real
    preprocessing on fold-0 cases, synthetic CPU forward/backward at `(1,3,32,256,256)`, the
    2-case CPU micro-overfit. `local-only`/`L` gates in the roadmap and phase docs run here.
-2. **A disposable modern-torch/CUDA scratch environment**, for prototyping LFF/CAF tensor math
-   (shape, gradient, orientation-gate correctness) on the local RTX 4050 before porting the
-   validated implementation into the pinned stack. Nothing here is installed into `GCALF-Net/`'s
-   dependencies or reported as a thesis result — it is scratch space for iteration speed only.
+2. **A disposable scratch environment**, if needed for isolated experiments. CUDA extension checks
+   may run directly in `gcalf:m1` on the local RTX 4050; nothing outside the authoritative image is
+   reported as a thesis result.
 
-**Why CPU-only for the pinned stack:** the local GPU is `sm_89`; the pinned CUDA 11.3 toolchain
-builds through `sm_86` (`docs/VAST_TESTING.md`), and it has 6 GB regardless. Every CUDA-dependent
-gate — the `nndet/csrc` extension build, `tests/test_csrc_cuda.py` (never yet run, per
-`docs/m0-verification.md`), CAF/FDSF CUDA memory profiling — is a cloud (`V`) gate, not local.
+**Why local training remains out of scope:** the local RTX 4050 is `sm_89` and CUDA 12.8 now builds
+the extension for it (and for `sm_120`), but the card has only 6 GB. The `nndet/csrc` build and
+`tests/test_csrc_cuda.py` can therefore run locally; full training and memory profiling remain
+cloud (`V`) gates.
 
 ## 13. Cloud testing / deployment
 
-Authoritative runbook: `docs/CLOUD_DEPLOYMENT_PLAN.md`. Pinned legacy Docker image on a
+Authoritative runbook: `docs/CLOUD_DEPLOYMENT_PLAN.md`. The CUDA 12.8 Docker image on a
 provider-neutral NVIDIA GPU VM, S3-compatible storage via AWS CLI v2, immutable dataset manifests,
 data staged to local NVMe before training, checkpoint/log sync after every epoch. The budget
 ladder is in §9; the pre-committed rungs live in `docs/CLOUD_DEPLOYMENT_PLAN.md` and are
@@ -541,7 +541,7 @@ unchanged by this document.
 |---|---|---|
 | FDSF/WAF build takes longer than budgeted | High | This is the largest new-code item in the plan (§0); if it slips past its phase gate, step down the budget ladder rather than compressing later phases. |
 | Grade head does not learn on 441 exact lesions | Medium | D3 rev. 2 recovered homogeneous Pooch25 grades; report per-grade CIs regardless. |
-| `nnDetection csrc`/old-torch env won't build | High | Docker image with the exact pinned base; CPU fallback for NMS in smoke tests; this is the #1 environment blocker historically. |
+| `nnDetection csrc`/toolchain ABI mismatch | High | Build and import the extension in the exact `gcalf:m1` image; run the CUDA NMS test locally on the 4050 and again on the rented architecture. |
 | GPU memory (3D + attention) | High | Smaller shared CAF/WAF windows, activation checkpointing, a predeclared fusion-level subset shared by both modules, batch 1 + accumulation, AMP everywhere except FFT. |
 | GGG4/5 remain small after D3 rev. 2 | Certain (37/47 exact lesions) | Report CIs and retain GGG4+5 as a secondary analysis; the 4-class endpoint remains primary (ADR 0002 D8). |
 | Full 20-run matrix over budget | Med | Pre-committed ladder (§9); never drop folds for only some configs. |

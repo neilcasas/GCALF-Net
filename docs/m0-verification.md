@@ -1,6 +1,19 @@
 # M0 verification record
 
-**Status:** complete — CUDA runtime verification (the V gate) now passes.
+**Status:** legacy M0 record retained; the CUDA 12.8 migration requires a fresh M0 verification.
+
+## 2026-09-22 — CUDA 12.8 local feasibility spike
+
+The target base image exists and resolved to
+pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel@sha256:3d614dfd422b7e43647491cbf07d6acc516c032fc49c594a94afdebd52552fb9.
+Inside that image, PyTorch reported 2.7.1+cu128, CUDA 12.8, and an NVIDIA GeForce RTX 4050
+Laptop GPU (sm_89); torch.cuda.get_arch_list() included sm_120. The read-only checkout's
+nndet/csrc was copied to /tmp, JIT-compiled with TORCH_CUDA_ARCH_LIST=8.9;12.0+PTX, and
+the 3D NMS output matched the pure-Python oracle ([0, 2, 3]).
+
+This is a feasibility spike, not the final image build or the official tests/test_csrc_cuda.py
+gate. Record the rebuilt gcalf:m1 digest and a non-skipped official test run below before
+closing M0 for the migrated stack.
 
 ## 2026-09-05 — mounted-checkout CUDA revalidation
 

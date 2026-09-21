@@ -49,7 +49,7 @@ Do not report completion based on a plausible diff. State exactly what verificat
 - Python package: `nndet`, a PyTorch-based fork of nnDetection for 3D prostate lesion detection and Gleason Grade Group classification.
 - Packaging: setuptools in `setup.py`; Python `>=3.8` is required by package metadata.
 - Native code: `nndet/csrc` is compiled through PyTorch C++/CUDA extensions during installation.
-- Runtime: Linux, PyTorch, and CUDA for GPU training. The Docker image is based on `nvcr.io/nvidia/pytorch:21.11-py3`.
+- Runtime: Linux, PyTorch 2.7.1 with CUDA 12.8 for GPU training. The Docker image is based on `pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel`.
 - Configuration: Hydra; training and model configuration is under `nndet/conf`.
 - Data and model roots: `det_data` and `det_models` environment variables.
 

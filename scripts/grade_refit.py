@@ -64,7 +64,7 @@ def main():
     module = MODULE_REGISTRY[cfg.module](
         model_cfg=OmegaConf.to_container(cfg.model_cfg, resolve=True),
         trainer_cfg=OmegaConf.to_container(cfg.trainer_cfg, resolve=True), plan=plan)
-    checkpoint = torch.load(args.source_checkpoint, map_location="cpu")
+    checkpoint = torch.load(args.source_checkpoint, map_location="cpu", weights_only=False)
     module.load_state_dict(checkpoint["state_dict"], strict=True)
     module.to(args.device)
     data_dir = Path(cfg.host.preprocessed_output_dir) / plan["data_identifier"] / "imagesTr"

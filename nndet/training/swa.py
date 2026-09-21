@@ -22,7 +22,7 @@ from loguru import logger
 import torch
 from torch.optim.lr_scheduler import _LRScheduler
 from pytorch_lightning.callbacks import StochasticWeightAveraging
-from pytorch_lightning.trainer.optimizers import _get_default_scheduler_config
+from pytorch_lightning.utilities.types import LRSchedulerConfig
 from pytorch_lightning.utilities import rank_zero_warn
 
 from nndet.training.learning_rate import CycleLinear
@@ -54,7 +54,9 @@ class BaseSWA(StochasticWeightAveraging):
         """
         super().__init__(
             swa_epoch_start=swa_epoch_start,
-            swa_lrs=None,
+            # The custom scheduler below replaces Lightning's SWALR, but 2.x
+            # still validates this constructor argument.
+            swa_lrs=1e-4,
             annealing_epochs=10,
             annealing_strategy="cos",
             avg_fn=avg_fn,
@@ -73,37 +75,56 @@ class BaseSWA(StochasticWeightAveraging):
         """
         Repalce current lr scheduler with SWA scheduler
         """
-        if trainer.current_epoch == self.swa_start:
+        if (not self._initialized) and (self.swa_start <= trainer.current_epoch <= self.swa_end):
+            self._initialized = True
             optimizer = trainer.optimizers[0]
             
             # move average model to request device.
             self._average_model = self._average_model.to(self._device or pl_module.device)
 
             _scheduler = self.get_swa_scheduler(optimizer)
-            self._swa_scheduler = _get_default_scheduler_config()
-            if not isinstance(_scheduler, dict):
-                _scheduler = {"scheduler": _scheduler}
-            self._swa_scheduler.update(_scheduler)
-
-            if trainer.lr_schedulers:
-                lr_scheduler = trainer.lr_schedulers[0]["scheduler"]
-                rank_zero_warn(f"Swapping lr_scheduler {lr_scheduler} for {self._swa_scheduler}")
-                trainer.lr_schedulers[0] = self._swa_scheduler
+            if isinstance(_scheduler, dict):
+                scheduler = _scheduler["scheduler"]
+                scheduler_kwargs = {key: value for key, value in _scheduler.items() if key != "scheduler"}
             else:
-                trainer.lr_schedulers.append(self._swa_scheduler)
+                scheduler = _scheduler
+                scheduler_kwargs = {}
+            # Lightning stores the scheduler object on the callback for
+            # checkpoint state, and the wrapper config on the trainer.
+            self._swa_scheduler = scheduler
+            swa_scheduler_config = LRSchedulerConfig(scheduler=scheduler, **scheduler_kwargs)
 
-            self.n_averaged = torch.tensor(0, dtype=torch.long, device=pl_module.device)
+            if trainer.lr_scheduler_configs:
+                lr_scheduler = trainer.lr_scheduler_configs[0].scheduler
+                rank_zero_warn(f"Swapping lr_scheduler {lr_scheduler} for {self._swa_scheduler}")
+                trainer.lr_scheduler_configs[0] = swa_scheduler_config
+            else:
+                trainer.lr_scheduler_configs.append(swa_scheduler_config)
 
-        if self.swa_start <= trainer.current_epoch <= self.swa_end:
-            self.update_parameters(self._average_model, pl_module, self.n_averaged, self.avg_fn)
+            if self._scheduler_state is not None:
+                self._swa_scheduler.load_state_dict(self._scheduler_state)
+            elif trainer.current_epoch != self.swa_start:
+                rank_zero_warn(
+                    "SWA is initializing after swa_start without checkpoint scheduler state."
+                )
+            if self.n_averaged is None:
+                self.n_averaged = torch.tensor(
+                    self._init_n_averaged, dtype=torch.long, device=pl_module.device)
+
+        if (self.swa_start <= trainer.current_epoch <= self.swa_end
+                and trainer.current_epoch > self._latest_update_epoch):
+            if self.n_averaged is None:
+                raise RuntimeError("SWA average count was not initialized")
+            self.update_parameters(self._average_model, pl_module, self.n_averaged, self._avg_fn)
+            self._latest_update_epoch = trainer.current_epoch
 
         if trainer.current_epoch == self.swa_end + 1:
             self.transfer_weights(self._average_model, pl_module)
             self.reset_batch_norm_and_save_state(pl_module)
-            trainer.num_training_batches += 1
+            trainer.fit_loop.max_batches += 1
             trainer.fit_loop._skip_backward = True
             self._accumulate_grad_batches = trainer.accumulate_grad_batches
-            trainer.accumulate_grad_batches = trainer.num_training_batches
+            trainer.accumulate_grad_batches = trainer.fit_loop.max_batches
 
     @abstractmethod
     def get_swa_scheduler(self, optimizer) -> Union[_LRScheduler, dict]:

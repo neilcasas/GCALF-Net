@@ -15,16 +15,11 @@ limitations under the License.
 """
 
 import torch
-from loguru import logger
 from torch import Tensor
-from torch.cuda.amp import autocast
 from torchvision.ops.boxes import nms as nms_2d
+from torch import amp
 
-try:
-    from nndet._C import nms as nms_gpu
-except ImportError:
-    logger.warning("nnDetection was not build with GPU support!")
-    nms_gpu = None
+from nndet._C import nms as nms_gpu
 from nndet.core.boxes.ops import box_iou
 
 
@@ -53,7 +48,7 @@ def nms_cpu(boxes, scores, thresh):
     return torch.tensor(keep).to(boxes).long()
 
 
-@autocast(enabled=False)
+@amp.autocast("cuda", enabled=False)
 def nms(boxes: Tensor, scores: Tensor, iou_threshold: float):
     """
     Performs non-maximum suppression
