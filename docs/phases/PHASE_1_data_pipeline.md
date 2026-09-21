@@ -42,7 +42,7 @@ Before building the full task, run a connected-component audit over all 425 posi
 
 This audit requires SimpleITK/numpy connected-component labeling (`scipy.ndimage.label` or
 `SimpleITK.ConnectedComponent`), unavailable in a bare-Python read-only pass — run it inside
-`gcalf:m0`, not as a doc exercise.
+`gcalf:m1`, not as a doc exercise.
 
 **Only after this audit's numbers are in** does Phase 2's evaluation design freeze between plain
 4-class reporting and a pre-registered GGG4+5 merged secondary analysis (ADR 0002 D8).

@@ -32,7 +32,7 @@ class WindowAttentionFusion3D(nn.Module):
         # mixed-precision backward pass from overflowing before GradScaler can
         # react; surrounding convolutions still use AMP normally.
         output_dtype = cnn_feat.dtype
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             cnn = self.cnn_align(cnn_feat.float())
             swin = self.swin_align(swin_feat.float())
             aligned = cnn + swin

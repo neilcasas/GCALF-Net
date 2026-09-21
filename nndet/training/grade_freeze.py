@@ -41,12 +41,14 @@ class GradeHeadFreezeCallback(Callback):
         if self.frozen:
             freeze_grade_head(pl_module.model)
 
-    def on_save_checkpoint(self, trainer, pl_module, checkpoint):
+    def state_dict(self):
         return {"best_score": self.best_score, "bad_epochs": self.bad_epochs, "frozen": self.frozen}
 
-    def on_load_checkpoint(self, trainer, pl_module, callback_state):
+    def load_state_dict(self, callback_state):
         self.best_score = callback_state["best_score"]
         self.bad_epochs = callback_state["bad_epochs"]
         self.frozen = callback_state["frozen"]
+
+    def on_fit_start(self, trainer, pl_module):
         if self.frozen:
             freeze_grade_head(pl_module.model)

@@ -1,10 +1,10 @@
 # Phase 0 — Environment & Repository Setup
 
 **Milestone:** M0 · **Depends on:** nothing · **Blocks:** everything
-**Goal:** two environments (`ARCHITECTURE.md §12`) — the pinned `gcalf:m0` image where every
-reported result must reproduce, and a disposable modern-CUDA scratch environment for LFF/CAF math
-prototyping on the local GPU. They never merge: nothing built in the scratch environment is
-installed into `GCALF-Net/`'s dependencies or reported as a thesis result.
+**Goal:** one authoritative `gcalf:m1` image (`ARCHITECTURE.md §12`) where every reported result
+must reproduce. The local RTX 4050 may run the CUDA extension smoke test in that image; its 6 GB
+still excludes full training. Any disposable scratch environment remains outside the reported
+runtime and is not used to build or install GCALF-Net.
 
 **Working repository:** `GCALF-Net/` — a copy of `PDHD-Net/` at tag `pdhd-upstream` (commit
 `e2330cf`), upstream remote removed. `git diff pdhd-upstream` is the thesis's exact changeset.
@@ -24,34 +24,34 @@ installed into `GCALF-Net/`'s dependencies or reported as a thesis result.
 
 ---
 
-## 0.1 The pinned environment is dictated by PDHD-Net, not chosen
+## 0.1 The authoritative environment is fixed before the matrix
 
-`requirements.txt` pins a 2021 stack: `pytorch_lightning>=1.3.1,<=1.4.2`, `nnunet==1.7.1`,
-`SimpleITK<2.1.0`, `torchmetrics<=0.7.3`. Do not fight these — they anchor:
+`requirements.txt` uses the minimum stack that supports Blackwell: `pytorch_lightning>=2.5,<2.6`,
+`nnunet==1.7.1`, `numpy<2`, and an unpinned modern `SimpleITK`. These choices anchor:
 
 | Component | Version |
 |---|---|
-| Python | 3.8 (authoritative Docker image) |
-| PyTorch / torchvision / torchaudio | 1.10.1 / 0.11.2 / 0.10.1 (CUDA 11.3) |
-| CUDA | 11.1 or 11.3 (must match the torch build) |
-| pytorch-lightning | 1.4.2 |
+| Python | 3.11 (authoritative Docker image) |
+| PyTorch / torchvision / torchaudio | 2.7.1 / 0.22.1 / 2.7.1 (CUDA 12.8) |
+| CUDA | 12.8 (driver >=570) |
+| pytorch-lightning | 2.5.x |
 | nnunet | 1.7.1 |
 
 GFNet/TransFuse/UCTransNet/DCA are **never installed** — copy classes out of them. Z-SSMNet is
 **never installed** — read-only reference.
 
-## 0.2 Why CPU-only locally, and what the scratch environment is for
+## 0.2 Why local training is still out of scope, and what the local CUDA gate is for
 
-The local RTX 4050 is `sm_89`. The pinned CUDA 11.3 toolchain builds through `sm_86`
-(`docs/VAST_TESTING.md`), and the card has 6 GB regardless of compute capability. Consequences:
+The local RTX 4050 is `sm_89`. CUDA 12.8 targets `8.0;8.6;8.9;9.0;12.0+PTX`, so the extension
+can be compiled and smoke-tested locally. The card still has only 6 GB, so it cannot host a real
+training run. Consequences:
 
-- **Every gate whose result must match what gets reported** runs inside `gcalf:m0`, CPU-only:
+- **Every gate whose result must match what gets reported** runs inside `gcalf:m1`:
   unit tests, config/registry assertions, manifest/fold validation, real preprocessing on fold-0
   cases, synthetic CPU forward/backward, the 2-case CPU micro-overfit (Phase 2). These are the
   **L** gates throughout the roadmap.
-- **Everything CUDA-dependent** — the `csrc` extension build, `test_csrc_cuda.py`, FDSF/WAF/LFF/CAF
-  memory profiling, real training — is a **V** gate, run on Vast.ai. Do not attempt to satisfy a
-  V gate locally; it cannot build against this GPU's compute capability.
+- **The CUDA extension build and `test_csrc_cuda.py`** can run locally; FDSF/WAF/LFF/CAF memory
+  profiling and real training remain **V** gates on Vast.ai.
 - A **separate, disposable modern-torch/CUDA conda env** (e.g. `conda create -n gcalf-scratch
   python=3.11` + a current `torch`/`torch.fft` build) may run on the local 4050 to iterate on
   LFF/CAF tensor math — shape, gradient flow, the orientation-gate logic — before porting the
@@ -60,7 +60,7 @@ The local RTX 4050 is `sm_89`. The pinned CUDA 11.3 toolchain builds through `sm
   thesis. It exists purely to make the edit-test loop faster than round-tripping through Docker
   for pure-math bugs that have nothing to do with the pinned stack.
 
-## 0.3 Step-by-step (pinned environment)
+## 0.3 Step-by-step (authoritative environment)
 
 1. **Create the matching Conda development environment:**
    ```bash
@@ -82,10 +82,10 @@ The local RTX 4050 is `sm_89`. The pinned CUDA 11.3 toolchain builds through `sm
    ```bash
    python -m pytest -q tests/test_imports.py tests/test_encoder_cpu.py
    ```
-5. **Build and verify the authoritative image on a GPU host (Vast.ai):**
+5. **Build and verify the authoritative image (locally when a compatible GPU is available, then on Vast.ai):**
    ```bash
-   docker build -t gcalf:m0 .
-   docker run --rm --gpus all gcalf:m0 python -m pytest -q tests
+   docker build -t gcalf:m1 .
+   docker run --rm --gpus all gcalf:m1 python -m pytest -q tests
    ```
    The CUDA test must run, not skip; assert `torch.cuda.is_available()` first inside the
    container. This gate passed on 2026-09-05; retain its log and rerun it after image or extension
@@ -97,28 +97,28 @@ The local RTX 4050 is `sm_89`. The pinned CUDA 11.3 toolchain builds through `sm
 
 | Symptom | Fix |
 |---|---|
-| `nvcc` not found | Install matching `cudatoolkit-dev` in conda, or use `pytorch/pytorch:1.10.0-cuda11.3-cudnn8-devel`. |
+| `nvcc` not found | Install matching `cudatoolkit-dev` in conda, or use `pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel`. |
 | ABI / torch version mismatch on import | Rebuild after installing the exact pinned torch: `pip install -e GCALF-Net/ --no-build-isolation`. |
-| No local CUDA at all | Expected here (§0.2) — run only the CPU import/encoder smoke locally; the authoritative build happens on the GPU host. M0 stays open until the CUDA extension test runs there. |
+| No local CUDA at all | The RTX 4050 can now run the CUDA extension smoke test in the target image; otherwise run CPU import/encoder checks and keep M0 open until a GPU host executes the CUDA gate. |
 | Docker CDI/GPU-vendor discovery fails on the build host | Record the exact error in `docs/m0-verification.md` (as already done once); this blocks M0's V gate — escalate rather than declaring M0 done without it. |
 
 ## 0.5 Docker (build once, reuse local + cloud)
 
 The committed `Dockerfile` is the M0 runtime:
 ```dockerfile
-FROM pytorch/pytorch:1.10.0-cuda11.3-cudnn8-devel
-RUN pip install torch==1.10.1+cu113 torchvision==0.11.2+cu113 \
-    torchaudio==0.10.1+cu113 --extra-index-url https://download.pytorch.org/whl/cu113
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel
+RUN pip install torch==2.7.1+cu128 torchvision==0.22.1+cu128 \
+    torchaudio==2.7.1+cu128 --extra-index-url https://download.pytorch.org/whl/cu128
 ENV det_data=/opt/data det_models=/opt/models
 ```
 Generate `env.lock.txt` from the completed image; record base/image digests in
-`docs/m0-verification.md`. Do not modernize PyTorch/Lightning during the GCALF comparison — it
-would confound baseline-vs-GCALF attribution. The complete provider-neutral VM, S3 storage, NVMe
+`docs/m0-verification.md`. The migration is permitted by ADR 0004 because no official matrix result
+existed when the build changed. The complete provider-neutral VM, S3 storage, NVMe
 staging, recovery, and security workflow is in `docs/CLOUD_DEPLOYMENT_PLAN.md`.
 
 ## 0.6 Deliverables & commit
 
-- Branch `feat/env-and-data`, commit "env: pinned gcalf conda env + gcalf scaffold + CPU encoder smoke".
+- Record the authoritative image digest and generated lockfile after the toolchain migration.
 - Files: `environment.yml`, `requirements-tools.txt`, `env.lock.txt`, `Dockerfile`,
   `tests/test_{imports,encoder_cpu,csrc_cuda}.py`, empty
   `nndet/arch/encoder/gcalf/{__init__,fdsf,waf,lff,caf,grade_head,registry}.py`.

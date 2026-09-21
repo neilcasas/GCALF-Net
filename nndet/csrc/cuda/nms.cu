@@ -10,7 +10,6 @@
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
-#include <ATen/cuda/CUDAApplyUtils.cuh>
 
 #include "cuda_helpers.h"
 
@@ -90,7 +89,7 @@ __global__ void nms_kernel(const int n_boxes, const float iou_threshold, const T
         t |= 1ULL << i;
       }
     }
-    const int col_blocks = at::cuda::ATenCeilDiv(n_boxes, threadsPerBlock);
+    const int col_blocks = (n_boxes + threadsPerBlock - 1) / threadsPerBlock;
     dev_mask[cur_box_idx * col_blocks + col_start] = t;
   }
 }
@@ -139,7 +138,7 @@ __global__ void nms_kernel_3d(const int n_boxes, const float iou_threshold, cons
         t |= 1ULL << i;
       }
     }
-    const int col_blocks = at::cuda::ATenCeilDiv(n_boxes, threadsPerBlock);
+    const int col_blocks = (n_boxes + threadsPerBlock - 1) / threadsPerBlock;
     dev_mask[cur_box_idx * col_blocks + col_start] = t;
   }
 }
@@ -147,8 +146,8 @@ __global__ void nms_kernel_3d(const int n_boxes, const float iou_threshold, cons
 
 at::Tensor nms_cuda(const at::Tensor& dets, const at::Tensor& scores, float iou_threshold) {
   /* dets expected as (n_dets, dim) where dim=4 in 2D, dim=6 in 3D */
-  AT_ASSERTM(dets.type().is_cuda(), "dets must be a CUDA tensor");
-  AT_ASSERTM(scores.type().is_cuda(), "scores must be a CUDA tensor");
+  TORCH_CHECK(dets.is_cuda(), "dets must be a CUDA tensor");
+  TORCH_CHECK(scores.is_cuda(), "scores must be a CUDA tensor");
   at::cuda::CUDAGuard device_guard(dets.device());
 
   bool is_3d = dets.size(1) == 6;
@@ -157,7 +156,7 @@ at::Tensor nms_cuda(const at::Tensor& dets, const at::Tensor& scores, float iou_
 
   int dets_num = dets.size(0);
 
-  const int col_blocks = at::cuda::ATenCeilDiv(dets_num, threadsPerBlock);
+  const int col_blocks = (dets_num + threadsPerBlock - 1) / threadsPerBlock;
 
   at::Tensor mask =
       at::empty({dets_num * col_blocks}, dets.options().dtype(at::kLong));
@@ -170,7 +169,7 @@ at::Tensor nms_cuda(const at::Tensor& dets, const at::Tensor& scores, float iou_
   if (is_3d) {
   //std::cout << "performing NMS on 3D boxes in CUDA" << std::endl;
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-      dets_sorted.type(), "nms_kernel_cuda", [&] {
+      dets_sorted.scalar_type(), "nms_kernel_cuda", [&] {
         nms_kernel_3d<scalar_t><<<blocks, threads, 0, stream>>>(
             dets_num,
             iou_threshold,
@@ -180,7 +179,7 @@ at::Tensor nms_cuda(const at::Tensor& dets, const at::Tensor& scores, float iou_
    }
    else {
    AT_DISPATCH_FLOATING_TYPES_AND_HALF(
-      dets_sorted.type(), "nms_kernel_cuda", [&] {
+      dets_sorted.scalar_type(), "nms_kernel_cuda", [&] {
         nms_kernel<scalar_t><<<blocks, threads, 0, stream>>>(
             dets_num,
             iou_threshold,

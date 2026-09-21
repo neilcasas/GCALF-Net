@@ -201,7 +201,7 @@ class MemoryEstimatorDetection(MemoryEstimator):
                 network = network.to(device)
                 # torch.cuda.memory_allocated
                 empty_mem = torch.cuda.memory_reserved()
-                scaler = torch.cuda.amp.GradScaler()
+                scaler = torch.amp.GradScaler("cuda")
                 opt = optimizer_cls(network.parameters())
 
                 boxes = [[0, 0, 2, 2]]
@@ -226,7 +226,7 @@ class MemoryEstimatorDetection(MemoryEstimator):
                                    (self.batch_size, *shape[1:]), device=device, dtype=torch.float),
                            }}
                     fixed_mem = torch.cuda.memory_reserved()
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast("cuda"):
                         loss_dict, _, _ = network.train_step(
                             images=inp["images"],
                             targets=inp["targets"],

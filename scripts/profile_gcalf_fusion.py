@@ -39,7 +39,7 @@ def profile_subset(task: str, plan: dict, levels: list, train_config: str) -> di
     torch.cuda.reset_peak_memory_stats()
     started = time.perf_counter()
     try:
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast("cuda"):
             detections, _, segmentation = model(inputs)
             loss = sum(value.float().mean() for value in detections.values())
             loss = loss + segmentation["seg_logits"].float().mean()

@@ -651,9 +651,9 @@ Model performance is evaluated using a set of metrics aligned with those reporte
 
 ## **a. Hardware** 
 
-The study utilized cloud-based GPU computing resources from Vast.ai to meet the computational demands of training and evaluating the proposed deep learning architecture. The minimum hardware specifications required to perform the study include a GPU with at least 12 GB of VRAM (e.g., NVIDIA RTX 3060), a multi-core processor with at least 6 cores, 16 GB of system RAM, and sufficient solid-state storage for handling large-scale 3D MRI datasets, running on a Linux-based operating system (e.g., Ubuntu 22.04 LTS) with CUDA support 
+The study utilizes cloud-based GPU computing resources from Vast.ai to meet the computational demands of training and evaluating the proposed deep learning architecture. The minimum hardware specification for the frozen plan is a GPU with at least 16 GB of VRAM (24 GB is preferred for availability and bandwidth), a multi-core processor with at least 6 cores, 16 GB of system RAM, and sufficient solid-state storage for handling large-scale 3D MRI datasets, running on a Linux-based operating system (e.g., Ubuntu 22.04 LTS) with a driver supporting CUDA 12.8 (driver >=570).
 
-(e.g., CUDA 11.8). Cloud-based infrastructure was selected over local hardware, given the volumetric nature of 3D biparametric MRI data and the significant memory and processing requirements of the hybrid CNN–Swin Transformer model. All model training, validation, and testing procedures were executed on the allocated GPU instances. 
+Cloud-based infrastructure was selected over local hardware, given the volumetric nature of 3D biparametric MRI data and the significant memory and processing requirements of the hybrid CNN–Swin Transformer model. All model training, validation, and testing procedures were executed on the allocated GPU instances.
 
 ## **b. Software** 
 

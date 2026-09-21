@@ -100,7 +100,7 @@ class WindowedCrossAttentionFusion3D(nn.Module):
         if cnn_feat.shape[0] != swin_feat.shape[0] or cnn_feat.shape[2:] != swin_feat.shape[2:]:
             raise ValueError("CNN and Swin features must have matching batch and spatial dimensions")
         output_dtype = cnn_feat.dtype
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             cnn = self.cnn_align(cnn_feat.float())
             swin = self.swin_align(swin_feat.float())
             cnn_windows, padding_mask, metadata = window_partition_3d(cnn, self.window_size)

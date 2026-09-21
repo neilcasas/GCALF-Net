@@ -304,7 +304,7 @@ def test_m2_baseline_forward_and_overfit_two_cases():
     # The detector combines dense anchor losses with a sparse grade loss.  The
     # native default initial scale (65536) overflows the first real-case
     # convolution backward on RTX 3090 before dynamic scaling can adapt.
-    scaler = torch.cuda.amp.GradScaler(init_scale=256.0)
+    scaler = torch.amp.GradScaler("cuda", init_scale=256.0)
     loss_history = []
     loss_components = {}
     started = perf_counter()
@@ -313,7 +313,7 @@ def test_m2_baseline_forward_and_overfit_two_cases():
         optimizer.zero_grad(set_to_none=True)
         total_loss = torch.zeros((), device=device)
         for batch in (positive, negative):
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast("cuda"):
                 losses, _, _ = model.train_step(
                     images=batch["data"],
                     targets=_loss_target(batch),

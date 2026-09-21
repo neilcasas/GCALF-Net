@@ -9,7 +9,7 @@ This document defines a reproducible path from an object-storage dataset to GCAL
 | Decision | Selected approach |
 |---|---|
 | Compute | Any Linux GPU VM with NVIDIA Container Toolkit and sufficient local NVMe |
-| Runtime | Frozen PyTorch 1.10/CUDA 11.3-era container for baseline fidelity |
+| Runtime | Frozen `gcalf:m1` image (PyTorch 2.7.1/CUDA 12.8) for baseline fidelity |
 | Storage API | AWS CLI v2 `s3` commands with optional `--endpoint-url` |
 | Training input | Immutable preprocessed nnDetection dataset staged to local NVMe |
 | Raw preprocessing | Supported as a separate one-time job |
@@ -17,7 +17,7 @@ This document defines a reproducible path from an object-storage dataset to GCAL
 | Required matrix | baseline, LFF-only, CAF-only, full GCALF x five official folds |
 | Secrets | VM workload identity when available; otherwise short-lived injected credentials |
 
-Non-goals: managed-provider SDK integration, Kubernetes, Terraform, training directly from S3, and dependency modernization.
+Non-goals: managed-provider SDK integration, Kubernetes, Terraform, and training directly from S3.
 
 ## 2. Planned Repository Additions
 
@@ -170,7 +170,7 @@ fi
 Build once in a controlled environment and run the same digest locally and in cloud:
 
 ```dockerfile
-FROM pytorch/pytorch:1.10.0-cuda11.3-cudnn8-devel
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
@@ -238,7 +238,7 @@ Verify these prerequisites on a fresh VM before downloading anything. Run them b
 ```bash
 nvidia-smi
 docker version
-docker run --rm --gpus all nvidia/cuda:11.3.1-base-ubuntu20.04 nvidia-smi
+  docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu22.04 nvidia-smi
 test -d "${LOCAL_ROOT}"
 df -h "${LOCAL_ROOT}"
 aws --version

@@ -89,7 +89,7 @@ for artifact in ("model_best.ckpt", "model_last.ckpt", "plan_inference.pkl"):
     assert (training_dir / artifact).is_file(), training_dir / artifact
 
 import torch
-state = torch.load(training_dir / "model_last.ckpt", map_location="cpu")["state_dict"]
+state = torch.load(training_dir / "model_last.ckpt", map_location="cpu", weights_only=False)["state_dict"]
 assert any(key.startswith("model.grade_head.") for key in state), "grade head was not checkpointed"
 grade_classifier_weights = [value for key, value in state.items() if key.endswith("grade_head.classifier.weight")]
 assert len(grade_classifier_weights) == 1 and grade_classifier_weights[0].shape[0] == 4, "grade head must emit GGG2-5 logits"

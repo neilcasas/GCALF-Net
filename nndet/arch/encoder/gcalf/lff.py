@@ -36,15 +36,26 @@ class LearnableFrequencyFilter3D(nn.Module):
 
     def forward(self, x):
         input_dtype = x.dtype
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             spectrum = torch.fft.rfftn(x.float(), dim=(-3, -2, -1), norm="ortho")
             base = spherical_mask_rfft(x.shape[-3:], self.radius,
                                        device=x.device)          # FDSF's M, centered on D,H
             delta = F.interpolate(self.delta_weight, size=spectrum.shape[-3:],
                                   mode="trilinear", align_corners=True)
             gain = (base + delta).repeat_interleave(self.in_channels // self.groups, dim=1)
-            gain = torch.fft.ifftshift(gain, dim=(-3, -2))       # centered grid -> rfftn's ordering
-            x_low = torch.fft.irfftn(spectrum * gain, s=x.shape[-3:],
-                                     dim=(-3, -2, -1), norm="ortho")
+            if x.device.type == "cpu":
+                # PyTorch 2.7's MKL rFFT backward is broken for this 3D shape.
+                # Use the mathematically equivalent full complex transform for
+                # CPU checks; CUDA retains the original rFFT path.
+                spectrum = torch.fft.fftn(x.float(), dim=(-3, -2, -1), norm="ortho")
+                tail = slice(1, -1) if x.shape[-1] % 2 == 0 else slice(1, None)
+                gain = torch.cat([gain, gain[..., tail].flip(-1)], dim=-1)
+                gain = torch.fft.ifftshift(gain, dim=(-3, -2))
+                x_low = torch.fft.ifftn(spectrum * gain,
+                                        dim=(-3, -2, -1), norm="ortho").real
+            else:
+                gain = torch.fft.ifftshift(gain, dim=(-3, -2))
+                x_low = torch.fft.irfftn(spectrum * gain, s=x.shape[-3:],
+                                         dim=(-3, -2, -1), norm="ortho")
         x_low = x_low.to(input_dtype)
         return x_low, x - x_low                                  # complementary by construction

@@ -33,8 +33,19 @@ def test_host_create_dry_run_does_not_require_or_execute_vastai():
     result = run_script(HOST, "create", "--offer-id", "123", "--disk-gb", "500", "--dry-run")
     assert result.returncode == 0
     assert "vastai create instance 123" in result.stdout
-    assert "pytorch/pytorch:1.10.0-cuda11.3-cudnn8-devel" in result.stdout
+    assert "pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel" in result.stdout
     assert "--label gcalf-m1-m6" in result.stdout
+
+
+def test_host_search_dry_run_parameterizes_gpu_offer():
+    result = run_script(
+        HOST, "search", "--gpu-name", "Example_GPU", "--num-gpus", "1", "--min-ram", "16", "--dry-run"
+    )
+    assert result.returncode == 0
+    assert "gpu_name=Example_GPU" in result.stdout
+    assert "num_gpus=1" in result.stdout
+    assert r"gpu_ram\>=16" in result.stdout
+    assert r"compute_cap\<=1200" in result.stdout
 
 
 def test_download_uses_the_pinned_kaggle_source_in_dry_run(tmp_path):

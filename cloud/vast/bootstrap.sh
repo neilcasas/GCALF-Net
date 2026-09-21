@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run inside the pinned Vast.ai container after the repository has been copied or cloned.
+# Run inside the target Vast.ai container after the repository has been copied or cloned.
 set -euo pipefail
 
 usage() {
@@ -15,7 +15,7 @@ die() {
 
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 evidence_dir=/workspace/evidence/m0
-image_ref=pytorch/pytorch:1.10.0-cuda11.3-cudnn8-devel
+image_ref=pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel
 dry_run=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -49,8 +49,8 @@ run() {
 
 if [[ "$dry_run" == true ]]; then
     run python -m pip install --upgrade pip
-    run python -m pip install --extra-index-url https://download.pytorch.org/whl/cu113 \
-        torch==1.10.1+cu113 torchvision==0.11.2+cu113 torchaudio==0.10.1+cu113
+    run python -m pip install --extra-index-url https://download.pytorch.org/whl/cu128 \
+        torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128
     run python -m pip install -r "$repo_dir/requirements.txt" -r "$repo_dir/requirements-tools.txt"
     run env FORCE_CUDA=1 python -m pip install -v -e "$repo_dir"
     exit 0
@@ -73,8 +73,8 @@ mkdir -p "$evidence_dir"
 } > "$evidence_dir/environment.txt"
 
 python -m pip install --upgrade pip
-python -m pip install --extra-index-url https://download.pytorch.org/whl/cu113 \
-    torch==1.10.1+cu113 torchvision==0.11.2+cu113 torchaudio==0.10.1+cu113
+python -m pip install --extra-index-url https://download.pytorch.org/whl/cu128 \
+    torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128
 torch_lib=$(python -c 'import os, torch; print(os.path.join(os.path.dirname(torch.__file__), "lib"))')
 export LD_LIBRARY_PATH="$torch_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 python -m pip install -r "$repo_dir/requirements.txt" -r "$repo_dir/requirements-tools.txt"

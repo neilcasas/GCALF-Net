@@ -217,18 +217,13 @@ size limitation, or (b) a pre-registered GGG4+5 merged secondary analysis, **aft
 counts are in hand — not before. Do not add this decision as a fifth class or make it the primary
 endpoint outright; it is a secondary analysis if added at all.
 
-### D9 — Local execution: pinned `gcalf:m0` (CPU-only) for everything that must match the reported result, plus a separate modern-CUDA scratch environment for LFF/CAF math prototyping
+### D9 — Local execution: the authoritative `gcalf:m1` stack, with CPU-only training on the 4050
 
-The local RTX 4050 is `sm_89`; the pinned CUDA 11.3 toolchain builds through `sm_86`
-(`docs/VAST_TESTING.md`), and it is 6 GB regardless. All gates that must match the cloud/reported
-result — unit tests, config parsing, manifest/fold validation, real preprocessing, synthetic
-CPU forward/backward, the 2-case CPU micro-overfit — run inside `gcalf:m0`, CPU-only. A second,
-disposable modern-torch/CUDA environment (not the pinned stack, never installed into
-`GCALF-Net/`'s reported results) may be used to prototype LFF/CAF tensor math (shape, gradient,
-orientation-gate correctness) on the 4050 before porting the validated implementation into the
-pinned environment. This does not modernize the reported runtime (ADR 0001's rejected
-alternative "Modernize runtime first" still stands) — it is scratch space for math iteration only,
-and nothing built there is installed or reported as the thesis result.
+ADR 0004 supersedes the old CUDA 11.3 restriction. The local RTX 4050 is `sm_89` and can now
+compile and execute the CUDA extension in `gcalf:m1` (Python 3.11, PyTorch 2.7.1/CUDA 12.8), but
+its 6 GB remains too small for a real training run. CPU checks and the 2-case micro-overfit stay
+valid locally; the CUDA extension gate can run locally before the V gate is repeated on a Blackwell
+card. Reported results still use the same `gcalf:m1` image digest locally and in the cloud.
 
 ### D10 — Budget: $150–350, full 20-run matrix is the planned rung
 

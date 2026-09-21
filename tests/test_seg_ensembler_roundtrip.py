@@ -48,7 +48,7 @@ def test_save_state_persists_the_overlap_map(tmp_path):
     ensembler = _ensembler_with_foreground()
     ensembler.save_state(tmp_path, "case0")
 
-    state = torch.load(str(tmp_path / "case0_seg.pt"))
+    state = torch.load(str(tmp_path / "case0_seg.pt"), weights_only=False)
     assert "overlap" in state, "overlap must round-trip or get_case_result divides by zero"
     assert torch.equal(torch.as_tensor(state["overlap"]), ensembler.overlap)
 

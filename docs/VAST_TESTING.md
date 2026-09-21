@@ -1,4 +1,4 @@
-# Four-GPU Vast.ai validation (M0--M6)
+# Vast.ai validation (M0--M6)
 
 This run uses one verified, on-demand Vast.ai instance only. It validates research software and
 is not a clinical workflow. Do not commit PI-CAI images, prepared arrays, checkpoints, credentials,
@@ -6,10 +6,11 @@ or exports.
 
 ## Prerequisites and cost controls
 
-Use four RTX 3090, RTX A5000, RTX A6000, or A100 GPUs with at least 24 GB VRAM each, 32 CPU cores,
-128 GB RAM, 500 GB local disk, direct SSH, and reliability at least 0.99. Do not select RTX 4090/Ada: the
-pinned CUDA 11.3 extension build targets compute capabilities through 8.6. The required image is
-`pytorch/pytorch:1.10.0-cuda11.3-cudnn8-devel`.
+The default search keeps four GPUs, at least 24 GB VRAM each, 32 CPU cores, 128 GB RAM, 500 GB local
+disk, direct SSH, and reliability at least 0.99; `--num-gpus` and `--min-ram` allow smaller or larger
+offers. CUDA 12.8 targets Ampere, Ada, Hopper, and Blackwell
+(`sm_120`); do not exclude a model by generation. The required image is
+`pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel`.
 
 Keep `$VAST_API_KEY` out of shell history and Git. Search is read-only. Creation and destruction
 are explicit; destruction additionally requires `--confirm`. Stop the instance when waiting on a
@@ -21,6 +22,7 @@ vastai set api-key "$VAST_API_KEY"
 ssh-keygen -t ed25519 -a 100 -f ~/.ssh/gcalf_vast_ed25519 -C "gcalf-vast"
 vastai create ssh-key "$(tr -d '\n' < ~/.ssh/gcalf_vast_ed25519.pub)"
 cloud/vast/host.sh search
+cloud/vast/host.sh search --gpu-name RTX_4090 --num-gpus 1 --min-ram 24
 cloud/vast/host.sh create --offer-id "$OFFER_ID" --disk-gb 500 --label gcalf-m1-m6
 cloud/vast/host.sh status --instance-id "$INSTANCE_ID"
 vastai ssh-url "$INSTANCE_ID"

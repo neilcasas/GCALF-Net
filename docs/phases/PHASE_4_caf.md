@@ -133,7 +133,7 @@ identity-plus-residual trap, `PHASE_3_lff.md §3.3`. Keep `fused_w` attention-on
 only through the trailing residual. Concatenating `cnn` before the output projection would create a
 second CNN path, so it is intentionally excluded from CAF.
 
-Confirm `batch_first=True` and `need_weights=False` behave as expected in the pinned PyTorch 1.10
+Confirm `batch_first=True` and `need_weights=False` behave as expected in the target PyTorch 2.7.1
 image; transpose to `(tokens,batch,channels)` explicitly if `batch_first` is unavailable in that
 exact patch version rather than modernizing the runtime.
 

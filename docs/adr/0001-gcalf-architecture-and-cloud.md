@@ -70,4 +70,4 @@ code in the pinned `gcalf:m0` image; they change how decision 2 is implemented, 
 
 ## Review Triggers
 
-Revisit this ADR only if the released encoder cannot train end-to-end, the pinned runtime cannot run on available GPU infrastructure, or measured windowed WAF/CAF cannot fit at the five-level contract's shared fusion locations. Any revision must update the method claim, configs, experiment matrix, and all affected documentation together.
+Revisit this ADR only if the released encoder cannot train end-to-end, the pinned runtime cannot run on available GPU infrastructure, or measured windowed WAF/CAF cannot fit at the five-level contract's shared fusion locations. ADR 0004 is the approved pre-matrix exception to decision 8: the legacy runtime could not target the available GPU generations, and the official matrix had not started. Any further revision must update the method claim, configs, experiment matrix, and all affected documentation together.

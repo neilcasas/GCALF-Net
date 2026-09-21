@@ -22,11 +22,9 @@ augment_cfg:
   multiprocessing: True # only deactivate this if debugging
 
 trainer_cfg:
-  gpus: 1 # number of gpus
-  accelerator: # distributed backend
-  precision: 16 # mixed precision
-  amp_backend: native # mixed precision backend
-  amp_level: O1 # when mixed precision backend is APEX use O1
+  devices: 1 # number of gpus
+  strategy: # distributed strategy
+  precision: "16-mixed" # mixed precision
   # Per default training is deterministic, non-deterministic allows
   # cudnn.benchmark which can give up to 20% performance. Set this to false
   # to perform non-deterministic training
