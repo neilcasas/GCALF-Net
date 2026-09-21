@@ -171,15 +171,13 @@ def test_grade_feature_rows_repeat_per_voxel_not_per_block():
 
 
 def test_grade_anchor_feature_extractor_does_not_scale_conv_out_with_anchors():
-    """The grade branch's parameter blowup (F2) was `conv_out` emitting
-    `internal_channels * anchors_per_pos` channels for a decision that doesn't need
-    per-anchor capacity. `build_conv_out` must emit `internal_channels` regardless of
-    `anchors_per_pos`."""
+    """Default mode (`per_anchor_features=False`, 1.33M params): `build_conv_out`
+    emits `internal_channels` regardless of `anchors_per_pos`."""
     conv = Generator(ConvInstanceRelu, 3)
     small = GradeAnchorFeatureExtractor(
-        conv=conv, in_channels=4, internal_channels=8, anchors_per_pos=1, num_levels=1)
+        conv=conv, in_channels=4, internal_channels=8, anchors_per_pos=1, num_levels=1, per_anchor_features=False)
     large = GradeAnchorFeatureExtractor(
-        conv=conv, in_channels=4, internal_channels=8, anchors_per_pos=27, num_levels=1)
+        conv=conv, in_channels=4, internal_channels=8, anchors_per_pos=27, num_levels=1, per_anchor_features=False)
 
     small_params = sum(p.numel() for p in small.conv_out.parameters())
     large_params = sum(p.numel() for p in large.conv_out.parameters())
@@ -187,6 +185,32 @@ def test_grade_anchor_feature_extractor_does_not_scale_conv_out_with_anchors():
     assert small_params == large_params
     # Conv3d(8 -> 8, k=3) + bias: 8*8*27 + 8.
     assert large_params == 8 * 8 * 27 + 8
+
+
+def test_grade_anchor_feature_extractor_scales_conv_out_when_per_anchor_enabled():
+    """Legacy/Ablation mode (`per_anchor_features=True`, 12.83M params):
+    `build_conv_out` emits `internal_channels * anchors_per_pos` channels."""
+    conv = Generator(ConvInstanceRelu, 3)
+    small = GradeAnchorFeatureExtractor(
+        conv=conv, in_channels=4, internal_channels=8, anchors_per_pos=1, num_levels=1, per_anchor_features=True)
+    large = GradeAnchorFeatureExtractor(
+        conv=conv, in_channels=4, internal_channels=8, anchors_per_pos=27, num_levels=1, per_anchor_features=True)
+
+    small_params = sum(p.numel() for p in small.conv_out.parameters())
+    large_params = sum(p.numel() for p in large.conv_out.parameters())
+
+    # Small: Conv3d(8 -> 8*1, k=3) + bias: 8*8*27 + 8.
+    assert small_params == 8 * 8 * 27 + 8
+    # Large: Conv3d(8 -> 8*27, k=3) + bias: 8*216*27 + 216.
+    assert large_params == 8 * 216 * 27 + 216
+    assert large_params > small_params * 26
+
+    # Verify output shape matches contract
+    x = torch.randn(2, 4, 3, 3, 3)
+    out_small = small(x, level=0)
+    out_large = large(x, level=0)
+    assert out_small.shape == (2, 27 * 1, 8)
+    assert out_large.shape == (2, 27 * 27, 8)
 
 
 def test_grade_classifier_head_gradients_reach_both_stages():

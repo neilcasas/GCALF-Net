@@ -135,6 +135,7 @@ def test_grade_metadata_pull_dry_run_requires_an_explicit_instance_and_never_ove
 
 def test_grade_remediation_dry_run_uses_multiprocessing_and_refuses_missing_anchor_counts(tmp_path):
     environment = {**os.environ, "det_models": str(tmp_path / "models")}
+    environment.pop("det_num_threads", None)
     result = subprocess.run(
         ["bash", str(GRADE_REMEDIATION), "--task", "Task2201_PICAI_csPCa", "--stage", "fix-a", "--tag", "a",
          "--repo-dir", str(ROOT), "--dry-run"], text=True, capture_output=True, env=environment)

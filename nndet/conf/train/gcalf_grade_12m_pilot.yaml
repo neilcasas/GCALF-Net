@@ -1,0 +1,11 @@
+# @package __global__
+defaults:
+  - gcalf_grade_pilot
+
+# Diagnostic pilot for the legacy 12.83M-parameter grade head (per_anchor_features: true)
+exp:
+  tag: "_grade12m_pilot"
+
+model_cfg:
+  head_grade_kwargs:
+    per_anchor_features: true

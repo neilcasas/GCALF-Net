@@ -32,7 +32,9 @@ class GradeAnchorFeatureExtractor(BaseClassifier):
                  num_levels: int,
                  num_convs: int = 3,
                  add_norm: bool = True,
+                 per_anchor_features: bool = False,
                  **kwargs):
+        self.per_anchor_features = per_anchor_features
         self.prior_prob = None  # unused: this head has no class-prior init
         super().__init__(
             conv=conv,
@@ -55,22 +57,22 @@ class GradeAnchorFeatureExtractor(BaseClassifier):
         raise NotImplementedError("GradeAnchorFeatureExtractor emits features, not logits")
 
     def build_conv_out(self, conv):
-        """Emit one internal_channels-wide feature per voxel, not one per anchor slot.
+        """Emit feature channels per voxel or per anchor slot depending on configuration.
 
-        BaseClassifier.build_conv_out emits ``num_classes * anchors_per_pos`` channels
-        so each anchor at a voxel gets its own logits -- correct for detection, where
-        anchors sharing a voxel need different box scores. The grade decision has no
-        such per-anchor signal: GradeHead projects a single per-voxel feature to grade
-        logits with one small Linear layer, so 27 independently-parameterized copies of
-        that projection (inherited from `num_classes=internal_channels` at 27
-        anchors/position) bought ~11.9M of this head's ~12.8M parameters with no
-        matching increase in real capacity. ``forward`` below expands the single
-        per-voxel feature across anchors explicitly instead of relying on distinct
-        learned channels per anchor.
+        Default (`per_anchor_features=False`, 1.33M params): emits `internal_channels`
+        per voxel and expands across anchors in forward via `repeat_interleave`, sharing
+        weights across the 27 anchors at each voxel.
+
+        Legacy/Ablation (`per_anchor_features=True`, 12.83M params): emits
+        `internal_channels * anchors_per_pos` channels, giving independent convolutional
+        projections to each of the 27 anchor shapes.
         """
+        out_channels = (self.internal_channels * self.anchors_per_pos
+                        if self.per_anchor_features
+                        else self.internal_channels)
         return conv(
             self.internal_channels,
-            self.internal_channels,
+            out_channels,
             kernel_size=3,
             stride=1,
             padding=1,
@@ -80,23 +82,17 @@ class GradeAnchorFeatureExtractor(BaseClassifier):
         )
 
     def forward(self, x: Tensor, level: int, **kwargs) -> Tensor:
-        """Produce per-anchor features by repeating each voxel's feature across its
-        anchors_per_pos slots, rather than learning anchors_per_pos independent
-        projections of it.
-
-        Row order must match the anchor generator / box_logits contract: voxel-major,
-        anchor fastest, i.e. ``row = voxel * anchors_per_pos + anchor``
-        (`nndet/core/boxes/anchors.py`, `BaseClassifier.forward`). `repeat_interleave`
-        on the voxel axis produces exactly that; `repeat` would instead tile the whole
-        voxel sequence `anchors_per_pos` times (``row = anchor * num_voxels +
-        voxel``), which is shape-identical but silently attaches each detection's
-        grade to the wrong voxel.
+        """Produce per-anchor features matching the anchor generator row contract:
+        voxel-major, anchor fastest (``row = voxel * anchors_per_pos + anchor``).
         """
         features = self.conv_out(self.conv_internal(x))
         axes = (0, 2, 3, 1) if self.dim == 2 else (0, 2, 3, 4, 1)
         features = features.permute(*axes).contiguous()
-        features = features.view(x.size()[0], -1, self.internal_channels)
-        return features.repeat_interleave(self.anchors_per_pos, dim=1)
+        if self.per_anchor_features:
+            return features.view(x.size()[0], -1, self.internal_channels)
+        else:
+            features = features.view(x.size()[0], -1, self.internal_channels)
+            return features.repeat_interleave(self.anchors_per_pos, dim=1)
 
 
 class GradeClassifierHead(nn.Module):
