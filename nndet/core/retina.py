@@ -167,7 +167,7 @@ class BaseRetinaNet(AbstractModel):
             grade_logits = pred_detection["grade_logits"][pos_idx]
             losses["grade"] = grade_loss(
                 grade_logits, batch_grades, batch_grade_supervised,
-                targets.get("grade_class_weights"))
+                targets.get("grade_class_weights"), loss_type=self.grade_head.loss_type)
             log_scalars["grade_loss_weight"] = grade_loss_weight(
                 batch_grades, batch_grade_supervised,
                 targets.get("grade_class_weights"))
@@ -421,7 +421,7 @@ class BaseRetinaNet(AbstractModel):
         pred_boxes, pred_probs = pred_detection["pred_boxes"], pred_detection["pred_probs"]
         pred_grade_probs = None
         if "grade_logits" in pred_detection:
-            pred_grade_probs = torch.softmax(pred_detection["grade_logits"], dim=1)
+            pred_grade_probs = self.grade_head.logits_to_probs(pred_detection["grade_logits"])
 
         # split boxes and scores per image
         pred_boxes = pred_boxes.split(boxes_per_image, 0)

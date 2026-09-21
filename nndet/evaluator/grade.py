@@ -48,6 +48,9 @@ class GradeEvaluator(AbstractEvaluator):
         scores = {
             "grade_weighted_f1": float(summary["grade_weighted_f1"]),
             "grade_balanced_accuracy": float(summary["grade_balanced_accuracy"]),
+            "grade_quadratic_weighted_kappa": float(summary["grade_quadratic_weighted_kappa"] or 0.0),
+            "grade_mae": float(summary["grade_mae"]),
+            "grade_adjacent_accuracy": float(summary["grade_adjacent_accuracy"]),
             "grade_matched_lesions": float(summary["grade_matched_detections"]),
         }
         curves = {

@@ -9,7 +9,7 @@ GradeAnchorFeatureExtractor reuses that tower via subclassing rather than
 duplicating it, and only reinterprets the final projection: BaseClassifier's
 num_classes-per-anchor-slot output becomes a plain internal_channels-per-
 anchor-slot feature vector, which GradeHead
-(nndet/arch/encoder/gcalf/grade_head.py) projects to 4 grade logits.
+(nndet/arch/encoder/gcalf/grade_head.py) projects to CE or CORAL grade logits.
 GradeClassifierHead composes the two and concatenates across levels exactly
 like DetectionHead.forward does for box_logits.
 """
@@ -104,6 +104,14 @@ class GradeClassifierHead(nn.Module):
         super().__init__()
         self.feature_extractor = feature_extractor
         self.grade_head = grade_head
+
+    @property
+    def loss_type(self):
+        return self.grade_head.loss_type
+
+    def logits_to_probs(self, logits: Tensor) -> Tensor:
+        """Convert grade logits through the configured grade head."""
+        return self.grade_head.logits_to_probs(logits)
 
     def forward(self, fmaps: List[Tensor]) -> Tensor:
         features = [self.feature_extractor(p, level=level) for level, p in enumerate(fmaps)]

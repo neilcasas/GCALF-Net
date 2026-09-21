@@ -15,6 +15,7 @@ model_cfg:
         window_size: [2, 7, 7]
         num_heads: 4
   head_grade_kwargs:
+    grade_loss_type: ce
     num_convs: 1
     norm_channels_per_group: 16
     norm_affine: true

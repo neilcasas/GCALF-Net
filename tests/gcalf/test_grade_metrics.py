@@ -50,6 +50,8 @@ def test_grade_summary_has_four_by_four_confusion_and_weighted_f1():
     assert summary["grade_missed_supervised"] == 1
     assert summary["grade_false_positives"] == 2
     assert 0.0 <= summary["grade_weighted_f1"] <= 1.0
+    assert summary["grade_mae"] == pytest.approx(1.0 / 3.0)
+    assert summary["grade_adjacent_accuracy"] == pytest.approx(1.0)
     assert summary["grade_score_threshold"] == 0.0
     assert "grade_false_positives_per_case" not in summary
 
@@ -155,6 +157,9 @@ def test_grade_evaluator_excludes_ungraded_matches_and_returns_only_scalar_score
     scores, curves = evaluator.finish_online_evaluation()
 
     assert scores["grade_matched_lesions"] == 1.0
+    assert scores["grade_quadratic_weighted_kappa"] == 0.0
+    assert scores["grade_mae"] == 0.0
+    assert scores["grade_adjacent_accuracy"] == 1.0
     assert all(isinstance(value, (float, int)) for value in scores.values())
     assert curves["grade_confusion_matrix"].tolist() == [[1, 0, 0, 0]] + [[0] * 4] * 3
     assert curves["grade_per_class_sensitivity"]["GGG2"] == 1.0
@@ -182,4 +187,6 @@ def test_grade_evaluator_accumulates_batches_and_zero_matches_are_scalar_safe():
     empty = GradeEvaluator.create()
     scores, _ = empty.finish_online_evaluation()
     assert scores["grade_matched_lesions"] == 0.0
+    assert scores["grade_mae"] == 0.0
+    assert scores["grade_adjacent_accuracy"] == 0.0
     assert all(isinstance(value, (float, int)) for value in scores.values())

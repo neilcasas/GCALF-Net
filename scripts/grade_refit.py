@@ -30,6 +30,28 @@ def _sha256(path):
     return digest.hexdigest()
 
 
+def _load_refit_checkpoint(module, checkpoint):
+    """Load a source checkpoint, allowing only a deliberate CE-to-CORAL head swap."""
+    state_dict = checkpoint["state_dict"]
+    if module.model.grade_head.loss_type != "coral":
+        module.load_state_dict(state_dict, strict=True)
+        return
+
+    grade_prefix = "model.grade_head."
+    target_grade_keys = {key for key in module.state_dict() if key.startswith(grade_prefix)}
+    if not target_grade_keys:
+        raise RuntimeError(f"Expected checkpoint keys below {grade_prefix!r} for CORAL refit")
+    detector_state_dict = {
+        key: value for key, value in state_dict.items() if not key.startswith(grade_prefix)
+    }
+    missing, unexpected = module.load_state_dict(detector_state_dict, strict=False)
+    if set(missing) != target_grade_keys or unexpected:
+        raise RuntimeError(
+            "CORAL refit checkpoint changed outside the grade branch: "
+            f"missing={sorted(set(missing) - target_grade_keys)}, unexpected={sorted(unexpected)}"
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True, help="Resolved source-run Hydra config.")
@@ -65,7 +87,7 @@ def main():
         model_cfg=OmegaConf.to_container(cfg.model_cfg, resolve=True),
         trainer_cfg=OmegaConf.to_container(cfg.trainer_cfg, resolve=True), plan=plan)
     checkpoint = torch.load(args.source_checkpoint, map_location="cpu")
-    module.load_state_dict(checkpoint["state_dict"], strict=True)
+    _load_refit_checkpoint(module, checkpoint)
     module.to(args.device)
     data_dir = Path(cfg.host.preprocessed_output_dir) / plan["data_identifier"] / "imagesTr"
     datamodule = Datamodule(augment_cfg=OmegaConf.to_container(cfg.augment_cfg, resolve=True),

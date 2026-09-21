@@ -46,6 +46,8 @@ METRIC_FIELDS = (
     "grade_accuracy",
     "grade_macro_f1",
     "grade_balanced_accuracy",
+    "grade_mae",
+    "grade_adjacent_accuracy",
     "grade_quadratic_weighted_kappa",
     "grade_macro_ovr_auroc",
     "grade_multiclass_brier",

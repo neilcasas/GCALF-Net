@@ -80,6 +80,7 @@ class _RetinaTrainStep(BaseRetinaNet):
     def __init__(self):
         nn.Module.__init__(self)
         self.grade_head = nn.Identity()
+        self.grade_head.loss_type = "ce"
         self.segmenter = None
         self.head = _LossHead()
         self.logits = nn.Parameter(torch.tensor([[2.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]))
@@ -202,3 +203,12 @@ def test_grade_classifier_head_gradients_reach_both_stages():
     assert x.grad is not None and x.grad.abs().sum() > 0
     assert grade_head.classifier.weight.grad is not None
     assert grade_head.classifier.weight.grad.abs().sum() > 0
+
+
+def test_grade_classifier_head_delegates_probability_conversion():
+    grade_head = GradeHead(in_channels=6, loss_type="coral")
+    head = GradeClassifierHead(nn.Identity(), grade_head)
+    logits = torch.tensor([[1.0, 0.0, -1.0]])
+
+    assert torch.equal(head.logits_to_probs(logits), grade_head.logits_to_probs(logits))
+    assert head.loss_type == "coral"

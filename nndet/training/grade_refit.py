@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 
-from nndet.arch.encoder.gcalf.grade_head import grade_loss
+from nndet.arch.encoder.gcalf.grade_head import grade_loss, grade_loss_weight
 from nndet.arch.layers.norm import GroupNorm as NNDetGroupNorm
 
 
@@ -19,6 +19,10 @@ def reset_grade_branch(model):
         reset = getattr(module, "reset_parameters", None)
         if reset is not None:
             reset()
+        thresholds = getattr(module, "thresholds", None)
+        if thresholds is not None:
+            with torch.no_grad():
+                thresholds.zero_()
 
 
 def freeze_detector(model):
@@ -71,7 +75,7 @@ def grade_optimizer(grade_branch, weight_decay):
         for name, parameter in module.named_parameters(recurse=False):
             if not parameter.requires_grad:
                 continue
-            (no_decay if name == "bias" or isinstance(module, NORM_TYPES) else decay).append(parameter)
+            (no_decay if name in ("bias", "thresholds") or isinstance(module, NORM_TYPES) else decay).append(parameter)
     return torch.optim.SGD(
         [{"params": decay, "weight_decay": weight_decay}, {"params": no_decay, "weight_decay": 0.0}],
         lr=0.001, momentum=0.9, nesterov=True,
@@ -101,8 +105,11 @@ class GradeRefitLoop:
             anchors, batch["boxes"], batch["grades"], batch["grade_supervised"])
         grades = torch.cat(matched_grades, dim=0)[pos_idx]
         supervised = torch.cat(supervised, dim=0)[pos_idx]
-        loss = grade_loss(prediction["grade_logits"][pos_idx], grades, supervised, self.class_weights)
-        denominator = self.class_weights[grades[supervised] - 2].sum() if supervised.any() else None
+        loss = grade_loss(
+            prediction["grade_logits"][pos_idx], grades, supervised, self.class_weights,
+            loss_type=model.grade_head.loss_type)
+        denominator = (grade_loss_weight(grades, supervised, self.class_weights)
+                       if supervised.any() else None)
         return loss, denominator
 
     def _to_device(self, value):

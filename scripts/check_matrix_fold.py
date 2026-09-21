@@ -36,6 +36,9 @@ LOCKED_TRAINER_CFG = {
     "max_num_epochs": 50,
     "swa_epochs": 10,
 }
+LOCKED_MODEL_CFG = {
+    "head_grade_kwargs.grade_loss_type": "ce",
+}
 LOCKED_DATALOADER_KWARGS = {"grade_balanced_sampling": False}
 
 # Known-cosmetic: batchgenerators worker-teardown race at process exit,
@@ -84,6 +87,11 @@ def check_resolved_config(train_dir, problems):
         actual = trainer_cfg.get(key)
         if actual != expected:
             _fail(problems, f"trainer_cfg.{key} = {actual!r}, expected {expected!r}")
+    grade_kwargs = resolved.get("model_cfg", {}).get("head_grade_kwargs", {}) or {}
+    for key, expected in LOCKED_MODEL_CFG.items():
+        actual = grade_kwargs.get(key.rsplit(".", 1)[-1])
+        if actual != expected:
+            _fail(problems, f"model_cfg.{key} = {actual!r}, expected {expected!r}")
     dataloader_kwargs = resolved.get("augment_cfg", {}).get("dataloader_kwargs", {}) or {}
     for key, expected in LOCKED_DATALOADER_KWARGS.items():
         actual = dataloader_kwargs.get(key, expected if expected is False else None)

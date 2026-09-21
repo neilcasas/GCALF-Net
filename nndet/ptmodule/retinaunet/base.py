@@ -840,9 +840,11 @@ class RetinaUNetModule(LightningBaseModuleSWA):
         kwargs = model_cfg.get('head_grade_kwargs')
         if kwargs is None:
             return None
+        kwargs = dict(kwargs)
+        grade_loss_type = kwargs.pop("grade_loss_type", "ce")
 
         conv = Generator(cls.head_conv_cls, plan_arch["dim"])
-        logger.info(f"Building:: grade head GradeClassifierHead: {kwargs}")
+        logger.info(f"Building:: grade head GradeClassifierHead: {kwargs}, loss_type={grade_loss_type}")
         feature_extractor = GradeAnchorFeatureExtractor(
             conv=conv,
             in_channels=plan_arch["fpn_channels"],
@@ -851,7 +853,10 @@ class RetinaUNetModule(LightningBaseModuleSWA):
             num_levels=len(plan_arch["decoder_levels"]),
             **kwargs,
         )
-        return GradeClassifierHead(feature_extractor, GradeHead(plan_arch["head_channels"]))
+        return GradeClassifierHead(
+            feature_extractor,
+            GradeHead(plan_arch["head_channels"], loss_type=grade_loss_type),
+        )
 
     @classmethod
     def _build_head(

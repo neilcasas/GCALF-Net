@@ -44,3 +44,23 @@ def test_check_detection_metric_fails_below_map_floor(tmp_path):
     problems = []
     check_matrix_fold.check_detection_metric(tmp_path, problems)
     assert len(problems) == 1 and "sanity floor" in problems[0]
+
+
+def test_check_resolved_config_locks_the_grade_loss_type(tmp_path):
+    resolved = {
+        "trainer_cfg": {
+            "grade_class_weight_source": "lesion",
+            "grade_freeze_patience": None,
+            "grade_checkpoint": "post_swa",
+            "max_num_epochs": 50,
+            "swa_epochs": 10,
+        },
+        "model_cfg": {"head_grade_kwargs": {"grade_loss_type": "coral"}},
+        "augment_cfg": {"dataloader_kwargs": {"grade_balanced_sampling": False}},
+    }
+    (tmp_path / "config_resolved.yaml").write_text(json.dumps(resolved))
+
+    problems = []
+    check_matrix_fold.check_resolved_config(tmp_path, problems)
+
+    assert problems == ["model_cfg.head_grade_kwargs.grade_loss_type = 'coral', expected 'ce'"]

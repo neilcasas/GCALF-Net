@@ -7,6 +7,7 @@ import SimpleITK as sitk
 
 
 GRADE_VALUES = (2, 3, 4, 5)
+NUM_GRADES = len(GRADE_VALUES)
 
 
 def _iou(box, boxes):
@@ -193,12 +194,12 @@ def _calibration_summary(true_grades, probabilities, bins=10):
         return {"grade_multiclass_brier": None, "grade_expected_calibration_error": None,
                 "grade_mean_confidence": None, "grade_mean_confidence_correct": None,
                 "grade_mean_confidence_incorrect": None}
-    probabilities = np.asarray(probabilities, dtype=float).reshape(-1, 4)
+    probabilities = np.asarray(probabilities, dtype=float).reshape(-1, NUM_GRADES)
     truths = np.asarray(true_grades, dtype=int) - GRADE_VALUES[0]
     predictions = probabilities.argmax(axis=1)
     confidence = probabilities.max(axis=1)
     correct = predictions == truths
-    one_hot = np.eye(len(GRADE_VALUES))[truths]
+    one_hot = np.eye(NUM_GRADES)[truths]
     brier = float(np.mean(np.square(probabilities - one_hot).sum(axis=1)))
     nll = float(-np.log(np.clip(probabilities[np.arange(len(truths)), truths], 1e-7, 1.0)).mean())
     ece = 0.0
@@ -223,7 +224,7 @@ def summarize_grade_matches(true_grades, predicted_grades, misses, false_positiv
     ``grade_score_threshold`` record the operating point ``grade_false_positives`` was
     computed at; ``num_cases`` must be the case count the caller matched over (omit
     only when the per-case rate is not needed)."""
-    confusion = np.zeros((4, 4), dtype=np.int64)
+    confusion = np.zeros((NUM_GRADES, NUM_GRADES), dtype=np.int64)
     for truth, prediction in zip(true_grades, predicted_grades):
         confusion[truth - 2, prediction - 2] += 1
     support = confusion.sum(axis=1)
@@ -237,11 +238,15 @@ def summarize_grade_matches(true_grades, predicted_grades, misses, false_positiv
     accuracy = float(tp.sum() / support.sum()) if support.sum() else 0.0
     macro_f1 = float(f1[present].mean()) if present.any() else 0.0
     balanced_accuracy = float(recall[present].mean()) if present.any() else 0.0
+    absolute_errors = np.abs(np.asarray(true_grades) - np.asarray(predicted_grades))
+    grade_mae = float(absolute_errors.mean()) if len(absolute_errors) else 0.0
+    adjacent_accuracy = float((absolute_errors <= 1).mean()) if len(absolute_errors) else 0.0
     # Quadratic-weighted Cohen's kappa on the fixed ordinal GGG2--5 scale.
     # It is undefined without observed matched grades or expected agreement.
     total = confusion.sum()
     if total:
-        weights = np.square(np.subtract.outer(np.arange(4), np.arange(4))) / 9.0
+        weights = np.square(np.subtract.outer(np.arange(NUM_GRADES), np.arange(NUM_GRADES))) \
+            / float((NUM_GRADES - 1) ** 2)
         expected = np.outer(support, predicted) / total
         observed_disagreement = float((weights * confusion).sum() / total)
         expected_disagreement = float((weights * expected).sum() / total)
@@ -259,6 +264,8 @@ def summarize_grade_matches(true_grades, predicted_grades, misses, false_positiv
         "grade_accuracy": accuracy,
         "grade_macro_f1": macro_f1,
         "grade_balanced_accuracy": balanced_accuracy,
+        "grade_mae": grade_mae,
+        "grade_adjacent_accuracy": adjacent_accuracy,
         "grade_quadratic_weighted_kappa": quadratic_weighted_kappa,
         "grade_per_class_sensitivity": {f"GGG{grade}": float(recall[grade - 2]) for grade in GRADE_VALUES},
         "grade_class_support": {f"GGG{grade}": int(support[grade - 2]) for grade in GRADE_VALUES},
@@ -267,7 +274,7 @@ def summarize_grade_matches(true_grades, predicted_grades, misses, false_positiv
     if num_cases:
         summary["grade_false_positives_per_case"] = float(false_positives) / num_cases
     if matched_probabilities is not None:
-        probabilities = np.asarray(matched_probabilities, dtype=float).reshape(-1, 4)
+        probabilities = np.asarray(matched_probabilities, dtype=float).reshape(-1, NUM_GRADES)
         if len(probabilities) != len(true_grades):
             raise ValueError("Matched grade probabilities must align with matched ground-truth grades")
         ovr_auroc = {

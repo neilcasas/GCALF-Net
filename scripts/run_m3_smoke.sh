@@ -122,7 +122,8 @@ with grade_metrics_path.open() as file:
 
 grade_fields = ("grade_matched_detections", "grade_matched_ungraded_lesions", "grade_missed_supervised",
                 "grade_false_positives", "grade_false_positives_per_case", "grade_score_threshold",
-                "grade_weighted_f1")
+                "grade_weighted_f1", "grade_quadratic_weighted_kappa", "grade_mae",
+                "grade_adjacent_accuracy")
 assert all(math.isfinite(float(grade_metrics[field])) for field in grade_fields), grade_metrics
 
 supervised_lesions = 0
