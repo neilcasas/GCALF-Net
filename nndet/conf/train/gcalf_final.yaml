@@ -25,6 +25,9 @@ augment_cfg:
       dilation_vox: 3
       feather_sigma: 1.0
       zone_match: prefer
+      min_gland_frac: 0.95
+      min_zone_frac: 0.50
+      max_placement_attempts: 8
       instance_id_offset: 10000
       jitter_channels: [0, 2]
       shuffle_labels: false

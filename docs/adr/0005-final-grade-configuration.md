@@ -97,3 +97,29 @@ there voids any grade-supervision claim.
 - Matrix launch remains blocked until anatomy containment validation, bank
   construction, Phase 1 telemetry, measured anchor counts, and the Day-0 probe
   are recorded.
+
+## Addendum: transfer-path safety fixes (2026-09-23)
+
+The transfer implementation now keeps the declared feathered, dilated region
+as intensity-blend support, but derives the synthetic instance label from the
+transformed lesion mask itself. Pasted blend footprints reject any collision
+with a real positive instance, and candidate placements require at least 0.95
+of lesion voxels inside the gland and at least 0.50 inside the selected target
+zone. Placement retries are bounded at eight centre redraws. These changes do
+not alter the declared intervention or its locked blend-support values.
+
+The fold-0 detection safety gate is now enforced between fold 0 and folds 1--4
+by comparing only `lesion_ap` and `picai_score` with the same-wave baseline.
+The transfer worker stream is wired to `exp.seed`, with the process ID removed
+from its seed derivation, so changing the experiment seed changes the
+augmentation stream reproducibly.
+
+Because collision and anatomy rejection change the effective paste rate, the
+Phase 1 post-paste telemetry and `grade_anchor_class_counts` are launch
+preconditions that must be re-measured after these fixes. Existing measurements
+must not be reused without that re-measurement.
+
+This addendum records, without resolving, a protocol tension found during the
+fix: ADR 0003:56-66 downgrades `lesion_ap`/`picai_score` to doubly-secondary
+figures because of the known `boxes_to_detection_map` defect, while ADR
+0005:76-77 uses those same two numbers as the fold-0 safety-gate criterion.

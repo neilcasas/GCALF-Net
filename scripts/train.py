@@ -256,6 +256,7 @@ def _train(
     num_gpus = int(cfg["trainer_cfg"]["devices"])
     strategy = cfg["trainer_cfg"]["strategy"]
     augment_cfg = OmegaConf.to_container(cfg["augment_cfg"], resolve=True)
+    augment_cfg["seed"] = int(cfg["exp"]["seed"])
     if strategy == "ddp":
         if num_gpus < 2:
             raise ValueError("DDP requires at least two GPUs")

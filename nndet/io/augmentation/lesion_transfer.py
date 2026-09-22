@@ -84,6 +84,9 @@ class LesionTransferConfig:
     dilation_vox: int = 3
     feather_sigma: float = 1.0
     zone_match: str = "prefer"
+    min_gland_frac: float = 0.95
+    min_zone_frac: float = 0.50
+    max_placement_attempts: int = 8
     instance_id_offset: int = 10000
     jitter_channels: Tuple[int, ...] = (0, 2)
     shuffle_labels: bool = False
@@ -102,6 +105,7 @@ class LesionTransferConfig:
         allowed = {
             "enabled", "bank_dir", "source_grades", "p_paste", "max_pastes_per_patch",
             "region_mode", "dilation_vox", "feather_sigma", "zone_match",
+            "min_gland_frac", "min_zone_frac", "max_placement_attempts",
             "instance_id_offset", "jitter_channels", "shuffle_labels", "spatial", "intensity",
         }
         unknown = sorted(set(value) - allowed)
@@ -150,6 +154,15 @@ class LesionTransferConfig:
         feather_sigma = float(value.get("feather_sigma", 1.0))
         if feather_sigma <= 0:
             raise ValueError("feather_sigma must be positive")
+        min_gland_frac = float(value.get("min_gland_frac", 0.95))
+        if not 0.0 <= min_gland_frac <= 1.0:
+            raise ValueError("min_gland_frac must be in [0, 1]")
+        min_zone_frac = float(value.get("min_zone_frac", 0.50))
+        if not 0.0 <= min_zone_frac <= 1.0:
+            raise ValueError("min_zone_frac must be in [0, 1]")
+        max_placement_attempts = int(value.get("max_placement_attempts", 8))
+        if max_placement_attempts <= 0:
+            raise ValueError("max_placement_attempts must be positive")
         instance_id_offset = int(value.get("instance_id_offset", 10000))
         if instance_id_offset <= 0:
             raise ValueError("instance_id_offset must be positive")
@@ -167,6 +180,9 @@ class LesionTransferConfig:
             dilation_vox=dilation_vox,
             feather_sigma=feather_sigma,
             zone_match=zone_match,
+            min_gland_frac=min_gland_frac,
+            min_zone_frac=min_zone_frac,
+            max_placement_attempts=max_placement_attempts,
             instance_id_offset=instance_id_offset,
             jitter_channels=jitter_channels,
             shuffle_labels=bool(value.get("shuffle_labels", False)),
@@ -321,6 +337,43 @@ def sample_target_center(
     return candidates[int(rng.integers(len(candidates)))].astype(np.int64)
 
 
+def placement_slices(
+    center: Sequence[int],
+    source_shape: Sequence[int],
+    target_shape: Sequence[int],
+) -> Optional[Tuple[Tuple[slice, ...], Tuple[slice, ...]]]:
+    """Return aligned target/source slices for a centred placement.
+
+    The source crop is centred at ``center`` in the target array.  The result
+    is ``(target_slices, source_slices)`` and is ``None`` when the two arrays
+    do not overlap.  Keeping this calculation in one place is important:
+    anatomy validation and the eventual paste must examine the same voxels.
+    """
+    center = np.asarray(center, dtype=np.int64)
+    source_shape = np.asarray(source_shape, dtype=np.int64)
+    target_shape = np.asarray(target_shape, dtype=np.int64)
+    if center.ndim != 1 or source_shape.ndim != 1 or target_shape.ndim != 1:
+        raise ValueError("center and shapes must be one-dimensional")
+    if not (len(center) == len(source_shape) == len(target_shape)):
+        raise ValueError("center and shapes must have the same number of dimensions")
+    if np.any(source_shape <= 0) or np.any(target_shape <= 0):
+        raise ValueError("source and target shapes must be positive")
+
+    start = center - source_shape // 2
+    target_slices = []
+    source_slices = []
+    for origin, size, target_size in zip(start, source_shape, target_shape):
+        target_start = max(int(origin), 0)
+        target_stop = min(int(origin + size), int(target_size))
+        if target_start >= target_stop:
+            return None
+        source_start = target_start - int(origin)
+        source_stop = source_start + (target_stop - target_start)
+        target_slices.append(slice(target_start, target_stop))
+        source_slices.append(slice(source_start, source_stop))
+    return tuple(target_slices), tuple(source_slices)
+
+
 def _rotation_matrix(angles: Sequence[float]) -> np.ndarray:
     rz, ry, rx = angles
     cz, sz = np.cos(rz), np.sin(rz)
@@ -421,6 +474,82 @@ def feather_alpha(mask: np.ndarray, sigma: float) -> np.ndarray:
     return alpha.astype(np.float32, copy=False)
 
 
+def anatomy_occupancy_fractions(
+    source_mask: np.ndarray,
+    anatomy_patch: np.ndarray,
+    center: Sequence[int],
+    target_zone: str,
+    code_map: Optional[Mapping[str, int]] = None,
+) -> Tuple[float, float]:
+    """Return gland and requested-zone fractions for a candidate placement.
+
+    ``anatomy_patch`` uses the persisted code map from ``anatomy_frame``. The
+    optional default keeps this low-level helper convenient in isolation; the
+    runtime passes the map recorded by the backfill. The denominator is every
+    positive voxel in the full transformed ``source_mask``; voxels clipped by
+    the patch therefore count as outside the anatomy rather than disappearing
+    from the denominator.
+    """
+    source_mask = np.asarray(source_mask, dtype=bool)
+    anatomy_patch = np.asarray(anatomy_patch)
+    if source_mask.ndim != 3 or anatomy_patch.ndim != 3:
+        raise ValueError("source_mask and anatomy_patch must be three-dimensional")
+    if target_zone not in {"pz", "tz"}:
+        raise ValueError(f"Unknown target zone: {target_zone}")
+    code_map = code_map or {
+        "outside_gland": 0,
+        "gland_pz": 1,
+        "gland_tz": 2,
+        "gland_other": 3,
+    }
+    required_codes = {"outside_gland", "gland_pz", "gland_tz", "gland_other"}
+    if not required_codes <= set(code_map):
+        raise ValueError(f"Anatomy code map is missing keys: {sorted(required_codes - set(code_map))}")
+    denominator = int(source_mask.sum())
+    if denominator == 0:
+        return 0.0, 0.0
+    slices = placement_slices(center, source_mask.shape, anatomy_patch.shape)
+    if slices is None:
+        return 0.0, 0.0
+    target_index, source_index = slices
+    mask_local = source_mask[source_index]
+    anatomy_local = anatomy_patch[target_index]
+    gland_codes = {int(code_map["gland_pz"]), int(code_map["gland_tz"]), int(code_map["gland_other"])}
+    gland = np.isin(anatomy_local, tuple(gland_codes))
+    zone = anatomy_local == int(code_map[f"gland_{target_zone}"])
+    return (
+        float(np.count_nonzero(mask_local & gland)) / denominator,
+        float(np.count_nonzero(mask_local & zone)) / denominator,
+    )
+
+
+def blend_footprint_collides(
+    seg_patch: np.ndarray,
+    source_mask: np.ndarray,
+    center: Sequence[int],
+    config: LesionTransferConfig,
+) -> bool:
+    """Return whether the feathered blend footprint overlaps a real lesion."""
+    if seg_patch.ndim == 4:
+        if seg_patch.shape[0] != 1:
+            raise ValueError("seg_patch must have one channel")
+        seg_view = seg_patch[0]
+    elif seg_patch.ndim == 3:
+        seg_view = seg_patch
+    else:
+        raise ValueError("seg_patch must be [D,H,W] or [1,D,H,W]")
+    source_mask = np.asarray(source_mask, dtype=bool)
+    region = resolve_region(source_mask, config.region_mode, config.dilation_vox)
+    alpha = feather_alpha(region, config.feather_sigma)
+    slices = placement_slices(center, source_mask.shape, seg_view.shape)
+    if slices is None:
+        return False
+    target_index, source_index = slices
+    occupied = seg_view[target_index]
+    alpha_local = alpha[source_index]
+    return bool(np.any((occupied > 0) & (alpha_local > 0)))
+
+
 def paste_lesion(
     data_patch: np.ndarray,
     seg_patch: np.ndarray,
@@ -455,33 +584,28 @@ def paste_lesion(
 
     region = resolve_region(source_mask, config.region_mode, config.dilation_vox)
     alpha = feather_alpha(region, config.feather_sigma)
-    center = np.asarray(center, dtype=np.int64)
-    source_shape = np.asarray(source_mask.shape, dtype=np.int64)
-    start = center - source_shape // 2
-    target_slices = []
-    source_slices = []
-    for axis, (origin, size, target_size) in enumerate(zip(start, source_shape, seg_view.shape)):
-        target_start = max(int(origin), 0)
-        target_stop = min(int(origin + size), int(target_size))
-        if target_start >= target_stop:
-            return False
-        source_start = target_start - int(origin)
-        source_stop = source_start + (target_stop - target_start)
-        target_slices.append(slice(target_start, target_stop))
-        source_slices.append(slice(source_start, source_stop))
-    target_index = tuple(target_slices)
-    source_index = tuple(source_slices)
+    slices = placement_slices(center, source_mask.shape, seg_view.shape)
+    if slices is None:
+        return False
+    target_index, source_index = slices
     alpha_local = alpha[source_index]
-    valid = seg_view[target_index] != -1
-    if not np.any(valid & (alpha_local > 0)):
+    occupied = seg_view[target_index]
+    pad = occupied == -1
+    paste_allowed = ~pad
+    if np.any((occupied > 0) & (alpha_local > 0)):
+        return False
+    label_local = source_mask[source_index]
+    hard_mask = label_local & paste_allowed
+    if not np.any(hard_mask):
         return False
     target_data = data_patch[(slice(None), *target_index)]
     source_values = source_data[(slice(None), *source_index)]
-    blend = alpha_local * valid
+    blend = alpha_local * paste_allowed
     target_data[...] = target_data * (1.0 - blend[None]) + source_values * blend[None]
     data_patch[(slice(None), *target_index)] = target_data
-    hard_mask = (alpha_local > 0.5) & valid
-    seg_view[target_index][hard_mask] = int(new_id)
+    target_seg = seg_view[target_index]
+    target_seg[hard_mask] = int(new_id)
+    seg_view[target_index] = target_seg
 
     instance_mapping = properties.setdefault("instances", {})
     grades = properties.setdefault("grades", {})

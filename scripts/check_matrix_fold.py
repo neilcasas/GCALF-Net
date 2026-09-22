@@ -43,8 +43,14 @@ LOCKED_DATALOADER_KWARGS = {
     "grade_balanced_sampling": False,
     "lesion_transfer_cfg.enabled": True,
     "lesion_transfer_cfg.shuffle_labels": False,
+    "lesion_transfer_cfg.min_gland_frac": 0.95,
+    "lesion_transfer_cfg.min_zone_frac": 0.50,
 }
 LOCKED_DATALOADER = "DataLoader{}DLesionTransfer"
+SHUFFLED_DATALOADER_KWARGS = {
+    **LOCKED_DATALOADER_KWARGS,
+    "lesion_transfer_cfg.shuffle_labels": True,
+}
 
 # The three non-final detection arms remain the already-locked detection
 # controls. The full arm is the single declared CORAL + transfer intervention.
@@ -107,10 +113,14 @@ def check_resolved_config(train_dir, problems, arm=None):
         return
     resolved = yaml.safe_load(config_path.read_text())
     trainer_cfg = resolved.get("trainer_cfg", {})
-    locked_trainer = LOCKED_TRAINER_CFG if arm in (None, "full") else CONTROL_TRAINER_CFG
-    locked_model = LOCKED_MODEL_CFG if arm in (None, "full") else CONTROL_MODEL_CFG
-    locked_dataloader = LOCKED_DATALOADER_KWARGS if arm in (None, "full") else CONTROL_DATALOADER_KWARGS
-    expected_dataloader = LOCKED_DATALOADER if arm in (None, "full") else CONTROL_DATALOADER
+    is_locked_transfer = arm in (None, "full", "shuffled")
+    locked_trainer = LOCKED_TRAINER_CFG if is_locked_transfer else CONTROL_TRAINER_CFG
+    locked_model = LOCKED_MODEL_CFG if is_locked_transfer else CONTROL_MODEL_CFG
+    if arm == "shuffled":
+        locked_dataloader = SHUFFLED_DATALOADER_KWARGS
+    else:
+        locked_dataloader = LOCKED_DATALOADER_KWARGS if is_locked_transfer else CONTROL_DATALOADER_KWARGS
+    expected_dataloader = LOCKED_DATALOADER if is_locked_transfer else CONTROL_DATALOADER
     for key, expected in locked_trainer.items():
         actual = trainer_cfg.get(key)
         if actual != expected:

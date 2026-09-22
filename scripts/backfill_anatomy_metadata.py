@@ -90,6 +90,19 @@ def _mask_in_preprocessed_frame(mask, properties: Mapping[str, object], target_s
     return _fit_shape(ndimage.zoom(transposed, zoom=zoom, order=0, prefilter=False), tuple(target_shape))
 
 
+def _anatomy_codes(gland: np.ndarray, zones: np.ndarray) -> np.ndarray:
+    """Encode the persisted gland/PZ/TZ frame used by lesion transfer."""
+    gland = np.asarray(gland, dtype=bool)
+    zones = np.asarray(zones)
+    if gland.shape != zones.shape:
+        raise ValueError(f"Gland and zone masks must have the same shape: {gland.shape}, {zones.shape}")
+    anatomy = np.zeros(gland.shape, dtype=np.uint8)
+    anatomy[gland & (zones == 1)] = 1
+    anatomy[gland & (zones == 2)] = 2
+    anatomy[gland & ~np.isin(zones, (1, 2))] = 3
+    return anatomy
+
+
 def _stable_case_rng(seed: int, case_id: str) -> np.random.Generator:
     case_bytes = case_id.encode("utf-8")
     words = [int.from_bytes(case_bytes[index:index + 4].ljust(4, b"\0"), "little")
@@ -105,7 +118,7 @@ def _centres(mask: np.ndarray, max_centres: int, rng: np.random.Generator) -> np
 
 
 def _case_update(task_dir: Path, labels_root: Path, case_id: str, seed: int, max_centres: int,
-                 transpose_forward) -> Tuple[dict, float]:
+                 transpose_forward) -> Tuple[dict, float, np.ndarray]:
     import SimpleITK as sitk
     from scipy import ndimage
     from gcalf_data.preprocessing import resample_to_reference
@@ -132,6 +145,7 @@ def _case_update(task_dir: Path, labels_root: Path, case_id: str, seed: int, max
     zones = sitk.GetArrayFromImage(resample_to_reference(zones, reference, is_label=True))
     gland = _mask_in_preprocessed_frame(gland, properties, target_shape, transpose_forward).astype(bool)
     zones = _mask_in_preprocessed_frame(zones, properties, target_shape, transpose_forward).astype(np.uint8)
+    anatomy = _anatomy_codes(gland, zones)
 
     real_lesions = np.asarray(seg) > 0
     containment = float(gland[real_lesions].mean()) if real_lesions.any() else 1.0
@@ -159,8 +173,15 @@ def _case_update(task_dir: Path, labels_root: Path, case_id: str, seed: int, max
         "size_after_resampling": tuple(target_shape),
         "whole_gland_source": _WHOLE_GLAND_SOURCE,
         "zonal_source": _ZONAL_SOURCE,
+        "filename": f"{case_id}_anatomy.npy",
+        "code_map": {
+            "outside_gland": 0,
+            "gland_pz": 1,
+            "gland_tz": 2,
+            "gland_other": 3,
+        },
     }
-    return properties, containment
+    return properties, containment, anatomy
 
 
 def backfill(task_dir: Path, labels_root: Path, write: bool, seed: int = 2026,
@@ -175,26 +196,54 @@ def backfill(task_dir: Path, labels_root: Path, write: bool, seed: int = 2026,
         raise ValueError(f"Preprocessing plan is missing transpose_forward: {plan_path}")
     updates = {}
     containments = {}
-    for case_id in _case_ids(images_dir):
-        properties, containment = _case_update(
-            task_dir, labels_root, case_id, seed, max_centres, transpose_forward
-        )
-        updates[case_id] = properties
-        containments[case_id] = containment
+    staged_anatomy = {}
+    try:
+        for case_id in _case_ids(images_dir):
+            result = _case_update(
+                task_dir, labels_root, case_id, seed, max_centres, transpose_forward
+            )
+            if len(result) == 2:
+                # Keep the small test seam and older callers usable while all
+                # real backfill runs return the staged anatomy volume.
+                properties, containment = result
+                anatomy = None
+            else:
+                properties, containment, anatomy = result
+            updates[case_id] = properties
+            containments[case_id] = containment
+            if anatomy is not None:
+                staged_path = None
+                try:
+                    with tempfile.NamedTemporaryFile("wb", dir=images_dir, suffix=".npy", delete=False) as file:
+                        staged_path = Path(file.name)
+                        np.save(file, np.asarray(anatomy, dtype=np.uint8), allow_pickle=False)
+                    staged_anatomy[case_id] = staged_path
+                except Exception:
+                    if staged_path is not None and staged_path.exists():
+                        staged_path.unlink()
+                    raise
 
-    values = np.asarray(list(containments.values()), dtype=np.float64)
-    lesion_values = values[values < 1.0] if np.any(values < 1.0) else values
-    print(
-        "Containment distribution:",
-        {"n": int(len(lesion_values)), "min": float(lesion_values.min()),
-         "median": float(np.median(lesion_values)), "p05": float(np.quantile(lesion_values, 0.05)),
-         "max": float(lesion_values.max())},
-    )
-    if float(np.median(lesion_values)) < 0.9 or float(lesion_values.min()) < 0.5:
-        raise ValueError("Anatomy frame validation failed: median containment must be >= 0.9 and every case >= 0.5")
-    if write:
-        for case_id, properties in updates.items():
-            _write_pickle(images_dir / f"{case_id}.pkl", properties)
+        values = np.asarray(list(containments.values()), dtype=np.float64)
+        lesion_values = values[values < 1.0] if np.any(values < 1.0) else values
+        print(
+            "Containment distribution:",
+            {"n": int(len(lesion_values)), "min": float(lesion_values.min()),
+             "median": float(np.median(lesion_values)), "p05": float(np.quantile(lesion_values, 0.05)),
+             "max": float(lesion_values.max())},
+        )
+        if float(np.median(lesion_values)) < 0.9 or float(lesion_values.min()) < 0.5:
+            raise ValueError(
+                "Anatomy frame validation failed: median containment must be >= 0.9 and every case >= 0.5"
+            )
+        if write:
+            for case_id, staged_path in staged_anatomy.items():
+                os.replace(staged_path, images_dir / f"{case_id}_anatomy.npy")
+            for case_id, properties in updates.items():
+                _write_pickle(images_dir / f"{case_id}.pkl", properties)
+    finally:
+        for staged_path in staged_anatomy.values():
+            if staged_path.exists():
+                staged_path.unlink()
     print("Mode:", "WRITE" if write else "DRY_RUN")
     print("Cases:", len(updates), "updated:" if write else "would update:", len(updates))
     return containments

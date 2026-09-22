@@ -14,9 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-import os
+from collections import OrderedDict, defaultdict
 from pathlib import Path
-from collections import defaultdict
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -32,8 +31,10 @@ from nndet.io.augmentation.lesion_transfer import (
     LesionBank,
     LesionTransferConfig,
     augment_lesion,
+    anatomy_occupancy_fractions,
     paste_lesion,
     sample_target_center,
+    blend_footprint_collides,
 )
 
 
@@ -484,10 +485,28 @@ class DataLoader3DLesionTransfer(DataLoader3DOffset):
             raise ValueError("lesion transfer replaces grade-balanced sampling; keep it disabled")
         super().__init__(*args, **kwargs)
         self._lesion_transfer_rng = None
+        self._anatomy_cache = OrderedDict()
+        self._anatomy_cache_size = 32
+        self.paste_counters = {
+            "attempted": 0,
+            "succeeded": 0,
+            "rejected_collision": 0,
+            "rejected_anatomy": 0,
+        }
+        self.transfer_counters = self.paste_counters
         self.lesion_bank = None
         if self.lesion_transfer_cfg.enabled:
             if not self.lesion_transfer_cfg.bank_dir:
                 raise ValueError("lesion_transfer_cfg.bank_dir is required when transfer is enabled")
+            missing_anatomy = [
+                case_id for case_id, item in self._data.items()
+                if not Path(item["properties_file"]).with_name(f"{case_id}_anatomy.npy").is_file()
+            ]
+            if missing_anatomy:
+                raise FileNotFoundError(
+                    "Lesion transfer requires anatomy volumes for every training case; "
+                    f"missing {len(missing_anatomy)}: {missing_anatomy[:5]}"
+                )
             self.lesion_bank = LesionBank(
                 self.lesion_transfer_cfg.bank_dir,
                 allowed_case_ids=set(self._data.keys()),
@@ -504,8 +523,31 @@ class DataLoader3DLesionTransfer(DataLoader3DOffset):
         # its own NumPy seed from batchgenerators, avoiding identical streams.
         if self._lesion_transfer_rng is None:
             seed = int(np.random.randint(0, np.iinfo(np.uint32).max, dtype=np.uint32))
-            self._lesion_transfer_rng = np.random.default_rng(np.random.SeedSequence([seed, os.getpid()]))
+            self._lesion_transfer_rng = np.random.default_rng(np.random.SeedSequence([seed]))
         return self._lesion_transfer_rng
+
+    def _load_anatomy(self, case_id: str) -> np.ndarray:
+        """Load one persisted anatomy-code volume through a small LRU cache."""
+        if case_id in self._anatomy_cache:
+            anatomy = self._anatomy_cache.pop(case_id)
+            self._anatomy_cache[case_id] = anatomy
+            return anatomy
+        path = Path(self._data[case_id]["properties_file"]).with_name(f"{case_id}_anatomy.npy")
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing anatomy volume for {case_id}: {path}")
+        anatomy = np.load(path, mmap_mode="r", allow_pickle=False)
+        if anatomy.ndim != 3:
+            raise ValueError(f"Anatomy volume must be [D,H,W], found {anatomy.shape} in {path}")
+        self._anatomy_cache[case_id] = anatomy
+        while len(self._anatomy_cache) > self._anatomy_cache_size:
+            self._anatomy_cache.popitem(last=False)
+        return anatomy
+
+    def _record_paste_counter(self, key: str) -> None:
+        self.paste_counters[key] += 1
+        attempted = self.paste_counters["attempted"]
+        if attempted and attempted % 100 == 0:
+            logger.info("Lesion-transfer paste counters: {}", self.paste_counters)
 
     @staticmethod
     def _available_zones(properties: dict) -> List[str]:
@@ -530,6 +572,19 @@ class DataLoader3DLesionTransfer(DataLoader3DOffset):
         zones = self._available_zones(properties)
         if not zones:
             return data_patch, seg_patch, properties
+        anatomy = self._load_anatomy(case_id)
+        anatomy_patch = save_get_crop(
+            anatomy,
+            crop=crop,
+            mode="constant",
+            constant_values=0,
+        )[0]
+        code_map = (properties.get("anatomy_frame") or {}).get("code_map")
+        if code_map is None:
+            raise ValueError(
+                f"Anatomy code map is missing from properties for {case_id}; "
+                "rerun backfill_anatomy_metadata.py"
+            )
         for paste_index in range(cfg.max_pastes_per_patch):
             target_zone = zones[int(rng.integers(len(zones)))]
             grade = cfg.source_grades[int(rng.integers(len(cfg.source_grades)))]
@@ -538,35 +593,52 @@ class DataLoader3DLesionTransfer(DataLoader3DOffset):
                 continue
             source_data, source_mask = self.lesion_bank.load(record)
             source_data, source_mask = augment_lesion(source_data, source_mask, cfg, rng)
-            center = sample_target_center(
-                properties,
-                target_zone,
-                crop,
-                data_patch.shape[1:],
-                source_mask.shape,
-                rng,
-            )
-            if center is None:
-                continue
             new_id = cfg.instance_id_offset + paste_index
             paste_grade = grade
             if cfg.shuffle_labels:
                 # The fold-0 control destroys the source-grade/appearance
                 # association while retaining the same transfer geometry.
                 paste_grade = cfg.source_grades[int(rng.integers(len(cfg.source_grades)))]
-            paste_lesion(
-                data_patch=data_patch,
-                seg_patch=seg_patch,
-                properties=properties,
-                source_data=source_data,
-                source_mask=source_mask,
-                center=center,
-                new_id=new_id,
-                grade=paste_grade,
-                source_case_id=record["case_id"],
-                source_instance_id=record["instance_id"],
-                config=cfg,
-            )
+            for _attempt in range(cfg.max_placement_attempts):
+                center = sample_target_center(
+                    properties,
+                    target_zone,
+                    crop,
+                    data_patch.shape[1:],
+                    source_mask.shape,
+                    rng,
+                )
+                if center is None:
+                    break
+                self._record_paste_counter("attempted")
+                gland_frac, zone_frac = anatomy_occupancy_fractions(
+                    source_mask, anatomy_patch, center, target_zone, code_map
+                )
+                if gland_frac < cfg.min_gland_frac or zone_frac < cfg.min_zone_frac:
+                    self._record_paste_counter("rejected_anatomy")
+                    continue
+                accepted = paste_lesion(
+                    data_patch=data_patch,
+                    seg_patch=seg_patch,
+                    properties=properties,
+                    source_data=source_data,
+                    source_mask=source_mask,
+                    center=center,
+                    new_id=new_id,
+                    grade=paste_grade,
+                    source_case_id=record["case_id"],
+                    source_instance_id=record["instance_id"],
+                    config=cfg,
+                )
+                if accepted:
+                    self._record_paste_counter("succeeded")
+                    break
+                if blend_footprint_collides(seg_patch, source_mask, center, cfg):
+                    self._record_paste_counter("rejected_collision")
+                else:
+                    # A non-empty, contained transformed mask should only be
+                    # rejected by the remaining pad/geometry preflight.
+                    self._record_paste_counter("rejected_anatomy")
         positive_ids = {int(value) for value in np.unique(seg_patch) if int(value) > 0}
         mapped_ids = {int(key) for key in properties.get("instances", {})}
         assert positive_ids <= mapped_ids, (

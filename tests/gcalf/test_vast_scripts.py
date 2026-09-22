@@ -13,6 +13,7 @@ EXPORT = ROOT / "cloud" / "vast" / "export_results.sh"
 PAUSE_AND_BACKUP = ROOT / "cloud" / "vast" / "pause_and_backup.sh"
 PULL_GRADE_METADATA = ROOT / "cloud" / "vast" / "pull_grade_metadata.sh"
 GRADE_REMEDIATION = ROOT / "cloud" / "vast" / "run_grade_remediation.sh"
+MATRIX = ROOT / "cloud" / "vast" / "run_matrix.sh"
 
 
 def run_script(script: Path, *args: str, cwd=None):
@@ -159,3 +160,53 @@ def test_grade_remediation_dry_run_uses_multiprocessing_and_refuses_missing_anch
     assert result.returncode == 0, result.stderr
     assert "det_num_threads=16" in result.stdout
     assert "augment_cfg.multiprocessing=true" in result.stdout
+
+
+def test_matrix_dry_run_prints_fold0_detection_gate_and_blocks_bypass(tmp_path):
+    environment = {**os.environ, "det_data": str(tmp_path / "data"), "det_models": str(tmp_path / "models")}
+    result = subprocess.run(
+        ["bash", str(MATRIX), "--repo-dir", str(ROOT), "--dry-run", "--m5-record", ""],
+        text=True, capture_output=True, env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "scripts/check_fold0_detection_gate.py" in result.stdout
+
+    result = subprocess.run(
+        ["bash", str(MATRIX), "--repo-dir", str(ROOT), "--dry-run", "--fold-start", "1",
+         "--m5-record", ""],
+        text=True, capture_output=True, env=environment,
+    )
+    assert result.returncode == 2
+    assert "recorded passing fold-0 detection gate" in result.stderr
+
+    result = subprocess.run(
+        ["bash", str(MATRIX), "--repo-dir", str(ROOT), "--dry-run", "--fold-end", "4",
+         "--arms", "full", "--m5-record", ""],
+        text=True, capture_output=True, env=environment,
+    )
+    assert result.returncode == 2
+    assert "requires baseline" in result.stderr
+
+
+def test_matrix_restart_rejects_a_gate_record_with_relaxed_thresholds(tmp_path):
+    environment = {**os.environ, "det_data": str(tmp_path / "data"), "det_models": str(tmp_path / "models")}
+    record = (
+        tmp_path / "models" / "Task2201_PICAI_csPCa" /
+        "RetinaUNetV001_D3V001_3d_full" / "fold0" / "fold0_detection_gate.json"
+    )
+    record.parent.mkdir(parents=True)
+    record.write_text(
+        '{"task": "Task2201_PICAI_csPCa", "fold": 0, '
+        '"baseline": {"lesion_ap": 0.5, "picai_score": 0.6}, '
+        '"full": {"lesion_ap": 0.49, "picai_score": 0.58}, '
+        '"drops": {"lesion_ap": 0.01, "picai_score": 0.02}, '
+        '"thresholds": {"lesion_ap": 1.0, "picai_score": 1.0}, "passed": true}'
+    )
+
+    result = subprocess.run(
+        ["bash", str(MATRIX), "--repo-dir", str(ROOT), "--dry-run", "--fold-start", "1",
+         "--m5-record", ""],
+        text=True, capture_output=True, env=environment,
+    )
+    assert result.returncode == 2
+    assert "valid locked pass" in result.stderr

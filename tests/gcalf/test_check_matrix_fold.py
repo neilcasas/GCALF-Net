@@ -61,7 +61,11 @@ def test_check_resolved_config_locks_the_final_grade_intervention(tmp_path):
             "dataloader": "DataLoader{}DLesionTransfer",
             "dataloader_kwargs": {
                 "grade_balanced_sampling": False,
-                "lesion_transfer_cfg": {"enabled": True},
+                "lesion_transfer_cfg": {
+                    "enabled": True,
+                    "min_gland_frac": 0.95,
+                    "min_zone_frac": 0.50,
+                },
             },
         },
     }
