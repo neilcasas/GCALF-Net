@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -173,7 +174,7 @@ def test_matrix_dry_run_prints_fold0_detection_gate_and_blocks_bypass(tmp_path):
 
     result = subprocess.run(
         ["bash", str(MATRIX), "--repo-dir", str(ROOT), "--dry-run", "--fold-start", "1",
-         "--m5-record", ""],
+         "--python", sys.executable, "--m5-record", ""],
         text=True, capture_output=True, env=environment,
     )
     assert result.returncode == 2
@@ -205,7 +206,7 @@ def test_matrix_restart_rejects_a_gate_record_with_relaxed_thresholds(tmp_path):
 
     result = subprocess.run(
         ["bash", str(MATRIX), "--repo-dir", str(ROOT), "--dry-run", "--fold-start", "1",
-         "--m5-record", ""],
+         "--python", sys.executable, "--m5-record", ""],
         text=True, capture_output=True, env=environment,
     )
     assert result.returncode == 2
