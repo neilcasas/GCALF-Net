@@ -28,6 +28,13 @@ from nndet.io.load import load_pickle
 from nndet.io.patching import save_get_crop
 from nndet.utils.info import maybe_verbose_iterable
 from nndet.core.boxes.ops_np import box_size_np
+from nndet.io.augmentation.lesion_transfer import (
+    LesionBank,
+    LesionTransferConfig,
+    augment_lesion,
+    paste_lesion,
+    sample_target_center,
+)
 
 
 class FixedSlimDataLoaderBase(SlimDataLoaderBase):
@@ -56,6 +63,7 @@ class DataLoader3DFast(FixedSlimDataLoaderBase):
                  pad_kwargs_data: Optional[Dict[str, Any]] = None,
                  num_batches_per_epoch: int = 2500,
                  grade_balanced_sampling: bool = False,
+                 lesion_transfer_cfg: Optional[Dict[str, Any]] = None,
                  ):
         """
         Basic Dataloder for 3D Data.
@@ -148,6 +156,7 @@ class DataLoader3DFast(FixedSlimDataLoaderBase):
         """
         instance_cache = []
         grade_cache = defaultdict(list)
+        grade_zone_cache = defaultdict(list)
 
         logger.info("Building Sampling Cache for Dataloder")
         for case_id, item in maybe_verbose_iterable(self._data.items(), desc="Sampling Cache"):
@@ -156,6 +165,8 @@ class DataLoader3DFast(FixedSlimDataLoaderBase):
                 properties = load_pickle(item['properties_file']) if self.grade_balanced_sampling else None
                 grades = properties.get("grades", {}) if properties is not None else {}
                 supervised = properties.get("grade_supervised", {}) if properties is not None else {}
+                zones = properties.get("instance_zones", {}) if properties is not None else {}
+                zone_fractions = properties.get("anatomy_instance_zone_pz_frac", {}) if properties is not None else {}
                 for instance_id in instances:
                     instance_cache.append((case_id, instance_id))
                     if self.grade_balanced_sampling and supervised.get(str(instance_id),
@@ -166,13 +177,25 @@ class DataLoader3DFast(FixedSlimDataLoaderBase):
                                 f"{item['properties_file']}: supervised instance {instance_id} has invalid GGG {grade}"
                             )
                         grade_cache[int(grade)].append((case_id, instance_id))
+                        zone = zones.get(str(instance_id), zones.get(instance_id))
+                        if zone not in ("pz", "tz"):
+                            fraction = zone_fractions.get(str(instance_id), zone_fractions.get(instance_id))
+                            if fraction is not None:
+                                zone = "pz" if float(fraction) > 0.5 else "tz"
+                        if zone in ("pz", "tz"):
+                            grade_zone_cache[(int(grade), zone)].append((case_id, instance_id))
         if self.grade_balanced_sampling:
             missing = [grade for grade in range(2, 6) if not grade_cache[grade]]
             if missing:
                 raise ValueError(f"Grade-balanced sampling requires supervised GGG2-5; missing {missing}")
             logger.info("Grade-balanced foreground cache: " + ", ".join(
                 f"GGG{grade}={len(grade_cache[grade])}" for grade in range(2, 6)))
-        return {"case": list(self._data.keys()), "instances": instance_cache, "grade_instances": grade_cache}
+        return {
+            "case": list(self._data.keys()),
+            "instances": instance_cache,
+            "grade_instances": grade_cache,
+            "grade_zone_instances": grade_zone_cache,
+        }
 
     def select(self) -> Tuple[List, List]:
         """
@@ -268,6 +291,23 @@ class DataLoader3DFast(FixedSlimDataLoaderBase):
                                                  mode='constant',
                                                  constant_values=-1,
                                                  )[0]
+            data_patch, seg_patch, properties = self.maybe_transfer_lesion(
+                data_batch[batch_idx],
+                seg_batch[batch_idx],
+                properties,
+                case_id,
+                crop,
+                instance_id,
+            )
+            positive_ids = {int(value) for value in np.unique(seg_patch) if int(value) > 0}
+            mapped_ids = {int(key) for key in properties.get("instances", {})}
+            missing_ids = positive_ids - mapped_ids
+            if missing_ids:
+                raise AssertionError(
+                    f"Positive instance ids {sorted(missing_ids)} are missing from properties['instances']"
+                )
+            data_batch[batch_idx] = data_patch
+            seg_batch[batch_idx] = seg_patch
             case_ids_batch.append(case_id)
             instances_batch.append(properties.pop("instances"))
             properties_batch.append(properties)
@@ -278,6 +318,17 @@ class DataLoader3DFast(FixedSlimDataLoaderBase):
                 'instance_mapping': instances_batch,
                 'keys': case_ids_batch,
                 }
+
+    def maybe_transfer_lesion(self,
+                              data_patch: np.ndarray,
+                              seg_patch: np.ndarray,
+                              properties: dict,
+                              case_id: str,
+                              crop: Sequence[slice],
+                              instance_id: int,
+                              ) -> Tuple[np.ndarray, np.ndarray, dict]:
+        """Hook for training-only lesion transfer; base path is identity."""
+        return data_patch, seg_patch, properties
 
     def load_candidates(self, case_id: str, fg_crop: bool) -> Union[Dict, None]:
         """
@@ -421,6 +472,107 @@ class DataLoader3DOffset(DataLoader3DFast):
                 slice(origins[1], origins[1] + self.patch_size_generator[1]),
                 slice(origins[2], origins[2] + self.patch_size_generator[2]),
                 ]
+
+
+@DATALOADER_REGISTRY.register
+class DataLoader3DLesionTransfer(DataLoader3DOffset):
+    """Offset loader with optional lesion-centred transfer augmentation."""
+
+    def __init__(self, *args, lesion_transfer_cfg=None, **kwargs):
+        self.lesion_transfer_cfg = LesionTransferConfig.from_dict(lesion_transfer_cfg)
+        if self.lesion_transfer_cfg.enabled and kwargs.get("grade_balanced_sampling", False):
+            raise ValueError("lesion transfer replaces grade-balanced sampling; keep it disabled")
+        super().__init__(*args, **kwargs)
+        self._lesion_transfer_rng = None
+        self.lesion_bank = None
+        if self.lesion_transfer_cfg.enabled:
+            if not self.lesion_transfer_cfg.bank_dir:
+                raise ValueError("lesion_transfer_cfg.bank_dir is required when transfer is enabled")
+            self.lesion_bank = LesionBank(
+                self.lesion_transfer_cfg.bank_dir,
+                allowed_case_ids=set(self._data.keys()),
+            )
+            logger.info(
+                "Lesion bank filtered to training cohort: kept=%d dropped=%d cases=%d",
+                self.lesion_bank.kept_count,
+                self.lesion_bank.dropped_count,
+                len(self._data),
+            )
+
+    def _rng(self) -> np.random.Generator:
+        # Seed lazily after a worker has been forked/spawned. Each worker gets
+        # its own NumPy seed from batchgenerators, avoiding identical streams.
+        if self._lesion_transfer_rng is None:
+            seed = int(np.random.randint(0, np.iinfo(np.uint32).max, dtype=np.uint32))
+            self._lesion_transfer_rng = np.random.default_rng(np.random.SeedSequence([seed, os.getpid()]))
+        return self._lesion_transfer_rng
+
+    @staticmethod
+    def _available_zones(properties: dict) -> List[str]:
+        centers = properties.get("anatomy_centers", {})
+        return [zone for zone in ("pz", "tz") if len(np.asarray(centers.get(zone, [])))]
+
+    def maybe_transfer_lesion(self,
+                              data_patch: np.ndarray,
+                              seg_patch: np.ndarray,
+                              properties: dict,
+                              case_id: str,
+                              crop: Sequence[slice],
+                              instance_id: int,
+                              ) -> Tuple[np.ndarray, np.ndarray, dict]:
+        cfg = self.lesion_transfer_cfg
+        if not cfg.enabled or self.lesion_bank is None or cfg.max_pastes_per_patch == 0:
+            return data_patch, seg_patch, properties
+        rng = self._rng()
+        if rng.random() >= cfg.p_paste:
+            return data_patch, seg_patch, properties
+
+        zones = self._available_zones(properties)
+        if not zones:
+            return data_patch, seg_patch, properties
+        for paste_index in range(cfg.max_pastes_per_patch):
+            target_zone = zones[int(rng.integers(len(zones)))]
+            grade = cfg.source_grades[int(rng.integers(len(cfg.source_grades)))]
+            record = self.lesion_bank.sample(grade, target_zone, cfg.zone_match, rng)
+            if record is None:
+                continue
+            source_data, source_mask = self.lesion_bank.load(record)
+            source_data, source_mask = augment_lesion(source_data, source_mask, cfg, rng)
+            center = sample_target_center(
+                properties,
+                target_zone,
+                crop,
+                data_patch.shape[1:],
+                source_mask.shape,
+                rng,
+            )
+            if center is None:
+                continue
+            new_id = cfg.instance_id_offset + paste_index
+            paste_grade = grade
+            if cfg.shuffle_labels:
+                # The fold-0 control destroys the source-grade/appearance
+                # association while retaining the same transfer geometry.
+                paste_grade = cfg.source_grades[int(rng.integers(len(cfg.source_grades)))]
+            paste_lesion(
+                data_patch=data_patch,
+                seg_patch=seg_patch,
+                properties=properties,
+                source_data=source_data,
+                source_mask=source_mask,
+                center=center,
+                new_id=new_id,
+                grade=paste_grade,
+                source_case_id=record["case_id"],
+                source_instance_id=record["instance_id"],
+                config=cfg,
+            )
+        positive_ids = {int(value) for value in np.unique(seg_patch) if int(value) > 0}
+        mapped_ids = {int(key) for key in properties.get("instances", {})}
+        assert positive_ids <= mapped_ids, (
+            f"Positive instance ids {sorted(positive_ids - mapped_ids)} are missing from properties['instances']"
+        )
+        return data_patch, seg_patch, properties
 
 
 @DATALOADER_REGISTRY.register

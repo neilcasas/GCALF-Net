@@ -65,4 +65,5 @@ def test_validation_loader_disables_grade_balanced_sampling(monkeypatch):
     bg_module.Datamodule.val_dataloader(module)
 
     assert captured["grade_balanced_sampling"] is False
+    assert captured["lesion_transfer_cfg"] is None
     assert captured["other"] == "kept"

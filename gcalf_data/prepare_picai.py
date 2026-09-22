@@ -30,6 +30,7 @@ DEFAULT_TASK = "Task2201_PICAI_csPCa"
 TINY_NUM_MODALITIES = 3
 _MODALITY_SUFFIXES = ("t2w", "adc", "hbv")
 _WHOLE_GLAND_SOURCE = "Bosma22b"  # the PI-CAI maintainers' own AI segmentation; Guerbet23 also covers all 1,500 cases
+_ZONAL_SOURCE = "HeviAI23"  # pinned PZ/TZ source; both HeviAI23 and Yuan23 cover all 1,500 cases
 
 
 def load_splits(path: Path) -> List[Dict[str, List[str]]]:
@@ -121,6 +122,13 @@ def _whole_gland_mask_path(labels_root: Path, case_id: str) -> Path:
     path = labels_root / "anatomical_delineations" / "whole_gland" / "AI" / _WHOLE_GLAND_SOURCE / f"{case_id}.nii.gz"
     if not path.is_file():
         raise ValueError(f"No whole-gland mask found for {case_id}: {path}")
+    return path
+
+
+def _zonal_mask_path(labels_root: Path, case_id: str) -> Path:
+    path = labels_root / "anatomical_delineations" / "zonal_pz_tz" / "AI" / _ZONAL_SOURCE / f"{case_id}.nii.gz"
+    if not path.is_file():
+        raise ValueError(f"No zonal PZ/TZ mask found for {case_id}: {path}")
     return path
 
 

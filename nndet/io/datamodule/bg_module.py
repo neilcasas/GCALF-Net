@@ -247,6 +247,7 @@ class Datamodule(BaseModule):
         # Grade balancing is a training intervention. Validation must retain its
         # natural prior so grade monitors are interpretable.
         val_dataloader_kwargs["grade_balanced_sampling"] = False
+        val_dataloader_kwargs["lesion_transfer_cfg"] = None
         logger.info(f"Using validation {self.dataloader} with {val_dataloader_kwargs}")
 
         dl_val = dataloader_cls(

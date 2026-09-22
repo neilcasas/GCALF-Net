@@ -6,4 +6,5 @@ DATALOADER_REGISTRY: Mapping[str, Iterable] = Registry()
 from nndet.io.datamodule.bg_loader import (
     DataLoader3DFast,
     DataLoader3DOffset,
+    DataLoader3DLesionTransfer,
 )

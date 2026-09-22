@@ -89,9 +89,11 @@ for fold in $(seq "$fold_start" "$fold_end"); do
     if [[ "$dry_run" == true ]]; then
         for gpu in "${!arms[@]}"; do
             arm=${arms[$gpu]}
+            train_config="gcalf_${arm}"
+            [[ "$arm" == full ]] && train_config=gcalf_final
             printf 'CUDA_VISIBLE_DEVICES=%s det_num_threads=%q ' "$gpu" "$det_num_threads"
             printf '%q ' "$python_bin" scripts/train.py "$task" --sweep -o \
-                "train=gcalf_${arm}" "exp.fold=${fold}" "exp.seed=${seed}" "exp.tag=_${arm}" \
+                "train=$train_config" "exp.fold=${fold}" "exp.seed=${seed}" "exp.tag=_${arm}" \
                 "augment_cfg.multiprocessing=true"
             printf '\n'
         done
@@ -100,10 +102,12 @@ for fold in $(seq "$fold_start" "$fold_end"); do
 
     for gpu in "${!arms[@]}"; do
         arm=${arms[$gpu]}
+        train_config="gcalf_${arm}"
+        [[ "$arm" == full ]] && train_config=gcalf_final
         log_dir="$det_models/$task/RetinaUNetV001_D3V001_3d_${arm}"
         mkdir -p "$log_dir"
         CUDA_VISIBLE_DEVICES="$gpu" "$python_bin" scripts/train.py "$task" --sweep -o \
-            "train=gcalf_${arm}" "exp.fold=${fold}" "exp.seed=${seed}" "exp.tag=_${arm}" \
+            "train=$train_config" "exp.fold=${fold}" "exp.seed=${seed}" "exp.tag=_${arm}" \
             "augment_cfg.multiprocessing=true" \
             > "$log_dir/launch_fold${fold}.log" 2>&1 &
         pids+=("$!")
