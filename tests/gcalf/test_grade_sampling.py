@@ -65,4 +65,11 @@ def test_validation_loader_disables_grade_balanced_sampling(monkeypatch):
     bg_module.Datamodule.val_dataloader(module)
 
     assert captured["grade_balanced_sampling"] is False
+    assert captured["lesion_transfer_cfg"] is None
     assert captured["other"] == "kept"
+
+
+def test_augmenter_seeds_read_the_experiment_seed():
+    module = bg_module.Datamodule.__new__(bg_module.Datamodule)
+    module.augment_cfg = {"num_threads": 3, "seed": 77, "ddp_rank": 0}
+    assert module._augmenter_seeds(2) == [2_077, 2_078]

@@ -1,0 +1,10 @@
+# @package __global__
+defaults:
+  - gcalf_final
+
+# Fold-0 control for the label/appearance association. It is deliberately
+# outside run_matrix.sh's safety gate and has its own arm name.
+augment_cfg:
+  dataloader_kwargs:
+    lesion_transfer_cfg:
+      shuffle_labels: true

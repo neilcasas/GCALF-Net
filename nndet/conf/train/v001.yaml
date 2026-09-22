@@ -15,7 +15,9 @@ augment_cfg:
 
   dataloader: "DataLoader{}DOffset"
   oversample_foreground_percent: 0.5 # ratio of fg and bg in batches
-  dataloader_kwargs: {}
+  dataloader_kwargs:
+    # Training-time lesion transfer is opt-in; gcalf_final enables it.
+    lesion_transfer_cfg: null
 
   num_threads: ${oc.env:det_num_threads, "12"}
   num_cached_per_thread: 2

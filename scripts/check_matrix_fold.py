@@ -30,16 +30,37 @@ from pathlib import Path
 import yaml
 
 LOCKED_TRAINER_CFG = {
-    "grade_class_weight_source": "lesion",
+    "grade_class_weight_source": "anchor",
     "grade_freeze_patience": None,
     "grade_checkpoint": "post_swa",
     "max_num_epochs": 50,
     "swa_epochs": 10,
 }
 LOCKED_MODEL_CFG = {
-    "head_grade_kwargs.grade_loss_type": "ce",
+    "head_grade_kwargs.grade_loss_type": "coral",
 }
-LOCKED_DATALOADER_KWARGS = {"grade_balanced_sampling": False}
+LOCKED_DATALOADER_KWARGS = {
+    "grade_balanced_sampling": False,
+    "lesion_transfer_cfg.enabled": True,
+    "lesion_transfer_cfg.shuffle_labels": False,
+    "lesion_transfer_cfg.min_gland_frac": 0.95,
+    "lesion_transfer_cfg.min_zone_frac": 0.50,
+}
+LOCKED_DATALOADER = "DataLoader{}DLesionTransfer"
+SHUFFLED_DATALOADER_KWARGS = {
+    **LOCKED_DATALOADER_KWARGS,
+    "lesion_transfer_cfg.shuffle_labels": True,
+}
+
+# The three non-final detection arms remain the already-locked detection
+# controls. The full arm is the single declared CORAL + transfer intervention.
+CONTROL_TRAINER_CFG = {
+    **LOCKED_TRAINER_CFG,
+    "grade_class_weight_source": "lesion",
+}
+CONTROL_MODEL_CFG = {"head_grade_kwargs.grade_loss_type": "ce"}
+CONTROL_DATALOADER_KWARGS = {"grade_balanced_sampling": False}
+CONTROL_DATALOADER = "DataLoader{}DOffset"
 
 # Known-cosmetic: batchgenerators worker-teardown race at process exit,
 # occurring only after all real work (checkpoints, metrics) is saved.
@@ -76,27 +97,50 @@ def check_log_errors(train_dir, problems):
             _fail(problems, f"unexpected error in train.log: {line.strip()[:200]}")
 
 
-def check_resolved_config(train_dir, problems):
+def _nested_get(mapping, dotted_key, default=None):
+    value = mapping
+    for key in dotted_key.split("."):
+        if not isinstance(value, dict):
+            return default
+        value = value.get(key, default)
+    return value
+
+
+def check_resolved_config(train_dir, problems, arm=None):
     config_path = train_dir / "config_resolved.yaml"
     if not config_path.is_file():
         _fail(problems, "missing config_resolved.yaml")
         return
     resolved = yaml.safe_load(config_path.read_text())
     trainer_cfg = resolved.get("trainer_cfg", {})
-    for key, expected in LOCKED_TRAINER_CFG.items():
+    is_locked_transfer = arm in (None, "full", "shuffled")
+    locked_trainer = LOCKED_TRAINER_CFG if is_locked_transfer else CONTROL_TRAINER_CFG
+    locked_model = LOCKED_MODEL_CFG if is_locked_transfer else CONTROL_MODEL_CFG
+    if arm == "shuffled":
+        locked_dataloader = SHUFFLED_DATALOADER_KWARGS
+    else:
+        locked_dataloader = LOCKED_DATALOADER_KWARGS if is_locked_transfer else CONTROL_DATALOADER_KWARGS
+    expected_dataloader = LOCKED_DATALOADER if is_locked_transfer else CONTROL_DATALOADER
+    for key, expected in locked_trainer.items():
         actual = trainer_cfg.get(key)
         if actual != expected:
             _fail(problems, f"trainer_cfg.{key} = {actual!r}, expected {expected!r}")
-    grade_kwargs = resolved.get("model_cfg", {}).get("head_grade_kwargs", {}) or {}
-    for key, expected in LOCKED_MODEL_CFG.items():
-        actual = grade_kwargs.get(key.rsplit(".", 1)[-1])
+    for key, expected in locked_model.items():
+        actual = _nested_get(resolved.get("model_cfg", {}), key)
         if actual != expected:
             _fail(problems, f"model_cfg.{key} = {actual!r}, expected {expected!r}")
     dataloader_kwargs = resolved.get("augment_cfg", {}).get("dataloader_kwargs", {}) or {}
-    for key, expected in LOCKED_DATALOADER_KWARGS.items():
-        actual = dataloader_kwargs.get(key, expected if expected is False else None)
+    for key, expected in locked_dataloader.items():
+        actual = _nested_get(dataloader_kwargs, key, expected if expected is False else None)
         if actual != expected:
             _fail(problems, f"augment_cfg.dataloader_kwargs.{key} = {actual!r}, expected {expected!r}")
+    actual_dataloader = resolved.get("augment_cfg", {}).get("dataloader")
+    if actual_dataloader != expected_dataloader:
+        _fail(problems, f"augment_cfg.dataloader = {actual_dataloader!r}, expected {expected_dataloader!r}")
+    if locked_trainer["grade_class_weight_source"] == "anchor":
+        counts = trainer_cfg.get("grade_anchor_class_counts")
+        if not isinstance(counts, list) or len(counts) != 4 or any(float(value) <= 0 for value in counts):
+            _fail(problems, "trainer_cfg.grade_anchor_class_counts must be four positive measured counts")
 
 
 def check_detection_metric(train_dir, problems):
@@ -151,7 +195,7 @@ def check_arm(models_root, task, arm, fold, m5_record):
         return [f"{arm}: run directory does not exist: {train_dir}"]
     check_checkpoints(train_dir, problems)
     check_log_errors(train_dir, problems)
-    check_resolved_config(train_dir, problems)
+    check_resolved_config(train_dir, problems, arm=arm)
     check_detection_metric(train_dir, problems)
     check_wall_clock(train_dir, arm, m5_record, problems)
     return [f"{arm}: {problem}" for problem in problems]
