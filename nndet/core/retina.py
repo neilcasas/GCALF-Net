@@ -141,7 +141,10 @@ class BaseRetinaNet(AbstractModel):
         target_classes: List[Tensor] = targets["target_classes"]
         target_seg: Tensor = targets["target_seg"]
 
-        pred_detection, anchors, pred_seg = self(images)
+        export_grade_features = bool(targets.get("export_grade_features", False))
+        if export_grade_features and (self.grade_head is None or "target_grades" not in targets):
+            raise ValueError("Grade feature export requires grade-head targets and supervision masks")
+        pred_detection, anchors, pred_seg = self(images, return_grade_features=export_grade_features)
         labels, matched_gt_boxes = self.assign_targets_to_anchors(
             anchors, target_boxes, target_classes)
 
@@ -192,6 +195,23 @@ class BaseRetinaNet(AbstractModel):
         else:
             prediction = None
 
+        if export_grade_features:
+            if prediction is None:
+                prediction = {}
+            anchor_counts = torch.as_tensor([len(item) for item in anchors], device=pos_idx.device)
+            image_indices = torch.repeat_interleave(
+                torch.arange(len(anchors), device=pos_idx.device), anchor_counts)[pos_idx]
+            positive_features = pred_detection["grade_features"][pos_idx]
+            if not (len(positive_features) == len(batch_grades) == len(batch_grade_supervised)
+                    == len(image_indices)):
+                raise RuntimeError("Matched grade features, labels, masks, and case indices are misaligned")
+            prediction["grade_feature_export"] = {
+                "features": positive_features.detach(),
+                "grades": batch_grades.detach(),
+                "supervised_mask": batch_grade_supervised.detach(),
+                "image_indices": image_indices.detach(),
+            }
+
         # self.save_matched_anchors(images=images, target_boxes=target_boxes,
         #                             anchors=anchors, pos_idx=pos_idx,
         #                             neg_idx=neg_idx, seg=seg_targets)
@@ -240,6 +260,7 @@ class BaseRetinaNet(AbstractModel):
 
     def forward(self,
                 inp: torch.Tensor,
+                return_grade_features: bool = False,
                 ) -> Tuple[Dict[str, torch.Tensor], List[torch.Tensor], Dict[str, torch.Tensor]]:
         """
         Compute predicted bounding boxes, scores and segmentations
@@ -264,7 +285,13 @@ class BaseRetinaNet(AbstractModel):
 
         pred_detection = self.head(feature_maps_head)
         if self.grade_head is not None:
-            pred_detection["grade_logits"] = self.grade_head(feature_maps_head)
+            if return_grade_features:
+                pred_detection["grade_logits"], pred_detection["grade_features"] = self.grade_head(
+                    feature_maps_head, return_features=True)
+            else:
+                pred_detection["grade_logits"] = self.grade_head(feature_maps_head)
+        elif return_grade_features:
+            raise ValueError("Grade feature export requires a configured grade head")
         anchors = self.anchor_generator(inp, feature_maps_head)
 
         pred_seg = self.segmenter(features_maps_all) if self.segmenter is not None else None

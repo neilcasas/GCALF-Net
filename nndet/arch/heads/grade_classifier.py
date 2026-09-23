@@ -109,7 +109,10 @@ class GradeClassifierHead(nn.Module):
         """Convert grade logits through the configured grade head."""
         return self.grade_head.logits_to_probs(logits)
 
-    def forward(self, fmaps: List[Tensor]) -> Tensor:
+    def forward(self, fmaps: List[Tensor], return_features: bool = False):
         features = [self.feature_extractor(p, level=level) for level, p in enumerate(fmaps)]
         features = torch.cat(features, dim=1).flatten(0, -2)
-        return self.grade_head(features)
+        logits = self.grade_head(features)
+        if return_features:
+            return logits, features
+        return logits
