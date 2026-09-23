@@ -298,3 +298,50 @@ checkout's diff were unchanged before and after. The containment gate is
 resolved; the lesion bank remains blocked only on an explicit `--write` and
 build step, and Fold 0 remains blocked on the Phase 1 telemetry and Day-0
 diagnostic probe gates below.
+
+## Addendum: anatomy `--write`, lesion bank build, and Phase 1 telemetry result (2026-09-24)
+
+Anatomy metadata was written for real (`backfill_anatomy_metadata.py --write`,
+exit `0`, durable log at
+`/workspace/evidence/backfill-write-20260924-write1/`): the printed gate
+matches the dry run exactly (`gated`: `n=405`, `min=0.5`, `median=0.9376`;
+the same 19 displacement-excluded case IDs), 1499 `*_anatomy.npy` files were
+committed. The lesion bank was then built (`build_lesion_bank.py --write`):
+231 of 441 grade-supervised GGG2-5 instances kept under the 2.0 mm donor
+bar, matching the measured yield table above exactly.
+
+`scripts/measure_transfer_anchor_telemetry.py`'s first real run against this
+bank crashed immediately with `RecursionError`: the raw augmenter batch
+carries per-case string metadata (`keys`, `properties`) alongside its tensor
+payload, and `nndet.utils.tensor.to_device`'s generic recursive walk never
+terminates on a string leaf (a Python `str` is itself a `Sequence`). Real
+Lightning training never hits this -- its own `transfer_batch_to_device`
+already skips non-tensor leaves before `training_step` is called, and this
+measurement bypasses the Trainer only to avoid an optimizer/backward pass,
+not to skip that same safety. Fixed with a local, script-scoped
+`_move_tensors_to_device` that treats `str`/`bytes` as leaves; the shared
+`nndet/utils/tensor.py` was not touched. Verified against real data (a
+20-batch smoke run, 3/3 pastes succeeded) before the full run.
+
+**Result: the fresh 250-batch measurement completed cleanly** (fold 0, seed
+2026, exit `0`, durable log and JSON at
+`/workspace/evidence/phase1-telemetry-20260924-p1/`):
+
+```
+grade_anchor_class_counts: [5425, 2452, 889, 1366]   # GGG2, GGG3, GGG4, GGG5
+transfer_counters: attempted=319 succeeded=68 rejected_collision=53 rejected_anatomy=198
+bank_filter: kept_donors=191 dropped_donors=40 training_cases=1199
+```
+
+These four counts have been pasted into
+`nndet/conf/train/gcalf_final.yaml`'s `trainer_cfg.grade_anchor_class_counts`,
+replacing the `null` placeholder, exactly as this section requires. Recorded
+without further interpretation: only 21% of attempted pastes succeeded
+(62% rejected on anatomy placement, the rest on collision) -- this is the
+real, measured post-paste behavior this gate exists to surface, not a defect
+in the measurement.
+
+Remaining before Fold 0: the Day-0 diagnostic probe (no checkpoint or
+feature-export code exists yet; scoped separately, not in this ADR) and a
+final re-check of the M5 budget record and fold-0 output-directory
+collision immediately before launch.
