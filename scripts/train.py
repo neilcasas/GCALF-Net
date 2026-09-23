@@ -336,7 +336,8 @@ def _train(
         ckpt_path = train_dir / "model_last.ckpt"
 
     logger.info(f"Using {num_gpus} GPUs for training")
-    trainer_strategy = strategy
+    # Preserve Lightning's automatic strategy when the configuration leaves it unset.
+    trainer_strategy = "auto" if strategy is None else strategy
     if strategy == "ddp":
         trainer_strategy = DDPStrategy(find_unused_parameters=True)
         # Lightning respawns this script after ``init_train_dir`` has changed
