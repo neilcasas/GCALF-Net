@@ -63,12 +63,31 @@ def _write_npz(path: Path, data: np.ndarray, mask: np.ndarray) -> None:
     os.replace(temporary_path, path)
 
 
+# Donor-eligibility bar (2026-09-23 anatomy-containment diagnosis, recorded in
+# docs/adr/0005-final-grade-configuration.md): a grade-supervised GGG2-5
+# instance is excluded as a paste donor if the p95 of its outside-gland voxel
+# distances exceeds this many mm. A containment-fraction bar was rejected --
+# matching the locked 0.95 placement threshold would cost roughly half of the
+# GGG4/GGG5 donors the transfer augmentation exists to amplify, penalising
+# ordinary capsule-boundary disagreement between an AI gland mask and a human
+# delineation rather than genuine displacement. This bar targets displacement
+# directly and was chosen from measured donor yield across all 441
+# grade-supervised instances.
+DONOR_MAX_OUTSIDE_DISTANCE_MM = 2.0
+
+
 def _supervised(properties: dict):
     if "anatomy_centers" not in properties or "anatomy_frame" not in properties:
         raise ValueError("Anatomy metadata is missing; run backfill_anatomy_metadata.py first")
+    if "anatomy_instance_outside_distance_p95_mm" not in properties:
+        raise ValueError(
+            "Anatomy metadata is missing donor outside-distance measurements; rerun "
+            "backfill_anatomy_metadata.py"
+        )
     grades = properties.get("grades", {})
     supervised = properties.get("grade_supervised", {})
     fractions = properties.get("anatomy_instance_zone_pz_frac", {})
+    outside_distance = properties["anatomy_instance_outside_distance_p95_mm"]
     for raw_instance_id, is_supervised in supervised.items():
         if not is_supervised:
             continue
@@ -79,6 +98,9 @@ def _supervised(properties: dict):
         grade = int(raw_grade)
         if grade not in (2, 3, 4, 5):
             raise ValueError(f"Invalid supervised GGG{grade} for instance {instance_id}")
+        distance = outside_distance.get(str(raw_instance_id), outside_distance.get(instance_id))
+        if distance is not None and distance > DONOR_MAX_OUTSIDE_DISTANCE_MM:
+            continue
         fraction = fractions.get(str(raw_instance_id), fractions.get(instance_id))
         yield instance_id, grade, None if fraction is None else float(fraction)
 
@@ -89,11 +111,13 @@ def build_bank(task_dir: Path, bank_dir: Path, write: bool) -> Tuple[list, int]:
     images_dir = task_dir / "preprocessed" / "D3V001_3d" / "imagesTr"
     records = []
     total_bytes = 0
+    total_supervised = 0
     pending = []
     for case_id in _case_ids(images_dir):
         properties = _load_pickle(images_dir / f"{case_id}.pkl")
         data, seg = _load_case(images_dir, case_id)
         spacing = tuple(float(value) for value in properties.get("spacing_after_resampling", ()))
+        total_supervised += sum(1 for value in properties.get("grade_supervised", {}).values() if value)
         for instance_id, grade, zone_pz_frac in _supervised(properties):
             lesion = seg == instance_id
             coordinates = np.argwhere(lesion)
@@ -117,7 +141,12 @@ def build_bank(task_dir: Path, bank_dir: Path, write: bool) -> Tuple[list, int]:
             pending.append((filename, crop_data, crop_mask))
             total_bytes += crop_data.nbytes + crop_mask.nbytes
 
-    print(f"Lesions: {len(records)}; estimated uncompressed payload: {total_bytes / 1024 / 1024:.1f} MiB")
+    rejected_by_distance = total_supervised - len(records)
+    print(
+        f"Lesions: {len(records)} (excluded {rejected_by_distance} grade-supervised instance(s) "
+        f"beyond {DONOR_MAX_OUTSIDE_DISTANCE_MM} mm outside-gland p95 distance); "
+        f"estimated uncompressed payload: {total_bytes / 1024 / 1024:.1f} MiB"
+    )
     if write:
         bank_dir.mkdir(parents=True, exist_ok=True)
         for filename, crop_data, crop_mask in pending:
