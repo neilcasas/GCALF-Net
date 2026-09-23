@@ -25,7 +25,7 @@ import random
 import re
 import sys
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping, Sequence
 
 MAX_BATCHES = 250
 GRADE_KEYS = tuple(f"GGG{grade}" for grade in range(2, 6))
@@ -86,13 +86,37 @@ def _loader_core(augmenter):
     raise RuntimeError("Could not inspect the production dataloader behind the augmenter")
 
 
+def _move_tensors_to_device(inp, device):
+    """Move only tensor leaves to `device`, passing everything else through
+    unchanged. The raw augmenter batch carries per-case metadata alongside
+    its tensor payload (``properties``, ``keys``: plain strings, paths, and
+    nested dicts including the anatomy-frame fields), which
+    ``nndet.utils.tensor.to_device``'s generic recursive walk cannot handle
+    -- a Python `str` is itself a `Sequence`, so recursing into one never
+    terminates. Real Lightning training never hits this: its own
+    `transfer_batch_to_device` already skips non-tensor leaves before
+    `training_step` is called, and this measurement bypasses the Trainer
+    (deliberately, to avoid an optimizer/backward pass) but must still
+    replicate that same safe behavior rather than a generic tensor mover."""
+    import torch
+
+    if isinstance(inp, torch.Tensor):
+        return inp.to(device=device)
+    if isinstance(inp, (str, bytes)):
+        return inp
+    if isinstance(inp, Mapping):
+        return type(inp)({key: _move_tensors_to_device(item, device) for key, item in inp.items()})
+    if isinstance(inp, Sequence):
+        return type(inp)(_move_tensors_to_device(item, device) for item in inp)
+    return inp
+
+
 def _run_measurement(module, cfg, plan: dict, data_dir: Path, batch_limit: int, seed: int,
                      bank_dir: Path, device) -> dict:
     import torch
     from omegaconf import OmegaConf
 
     from nndet.io.datamodule.bg_module import Datamodule
-    from nndet.utils.tensor import to_device
 
     _set_seed(seed)
     # OmegaConf.to_container builds a fresh plain dict/list tree (not a view
@@ -129,7 +153,7 @@ def _run_measurement(module, cfg, plan: dict, data_dir: Path, batch_limit: int, 
                     batch = next(iterator)
                 except StopIteration as exc:
                     raise RuntimeError("Training dataloader ended before the requested batch cap") from exc
-                output = module.training_step(to_device(batch, device), batch_idx=batch_idx)
+                output = module.training_step(_move_tensors_to_device(batch, device), batch_idx=batch_idx)
                 counts = [int(output[f"grade_anchor_count_GGG{grade}"]) for grade in range(2, 6)]
                 totals = [left + right for left, right in zip(totals, counts)]
                 positive += int(output["grade_positive_anchors"])
