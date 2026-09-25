@@ -63,10 +63,10 @@ def test_froc_curve_groups_tied_scores_and_uses_conservative_operating_points():
         events, num_patients=2, support={2: 1, 3: 1, 4: 1, 5: 0}
     )
 
-    assert fp_rates == [0.0, 0.0, 0.5, 0.5, 0.5, 1.0]
-    assert sensitivities[2] == [0.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    assert sensitivities[3] == [0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
-    assert sensitivities[5] == [0.0] * 6
+    assert fp_rates == [0.0, 0.0, 0.5, 0.5, 1.0]
+    assert sensitivities[2] == [0.0, 1.0, 1.0, 1.0, 1.0]
+    assert sensitivities[3] == [0.0, 0.0, 1.0, 1.0, 1.0]
+    assert sensitivities[5] == [0.0] * 5
     assert sensitivity_at_fp([0.0, 0.5, 1.0], [0.0, 0.2, 1.0], 0.75) == pytest.approx(0.2)
     assert sensitivity_at_fp([0.0, 0.5, 0.5, 1.0], [0.0, 0.2, 0.4, 1.0], 0.75) == pytest.approx(0.4)
     assert sensitivity_at_fp([0.0, 0.5], [0.0, 0.5], 1.0) == pytest.approx(0.5)
@@ -103,8 +103,8 @@ def test_generic_matching_absorbs_unsupervised_lesions_but_grade_matching_counts
         scores,
         probabilities,
         BOXES[:2],
-        np.asarray([2, -1]),
-        np.asarray([True, False]),
+        np.asarray([-1, 2]),
+        np.asarray([False, True]),
     )
     assert generic[0]["score"] == pytest.approx(0.9)
     assert generic[0]["grade"] is None
