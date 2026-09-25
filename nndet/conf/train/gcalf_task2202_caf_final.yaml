@@ -1,0 +1,10 @@
+# @package __global__
+defaults:
+  - gcalf_caf_final
+  - override /train/augmentation@augmentation: task2202
+  - _self_
+
+# Task2202 fold-0 post-paste telemetry; GGG2, GGG3, GGG4, GGG5.
+# Evidence: /workspace/evidence/task2202-anchor-telemetry-20260924/.
+trainer_cfg:
+  grade_anchor_class_counts: [5066, 2546, 960, 1454]
