@@ -50,23 +50,33 @@ maximum allowed drop versus fold-0 baseline.
 ## Day-0 Phase 1 probe
 
 The required diagnostic is a patient-disjoint multinomial logistic regression
-on grade-head features from the existing fold-0 diagnostic checkpoint, evaluated
+on grade-head features from the declared fold-0 diagnostic checkpoint, evaluated
 with macro OvR AUROC and a 2,000-resample patient bootstrap (seed 2026).
 
-**Result at implementation time:** not available in this checkout. No diagnostic
-checkpoint or feature export is present under the repository workspace, so no
-numeric result is fabricated here. The matrix is not launch-ready until the
-remote fold-0 probe records its point estimate and CI in this ADR:
+**Observed result (2026-09-24):** The declared 13-epoch fold-0 diagnostic
+completed successfully (`max_num_epochs: 13`; the training log contains epochs
+0–12). The checkpoint is
+`RetinaUNetV001_D3V001_3d_gradepilot_day0/fold0/model_best_grade.ckpt`, SHA-256
+`dd3e0539487f7868e8309bdeddf606f82d4064c86bd43a3e9d059b5ae9081aeb`.
+The checkpoint's stored `epoch` metadata is 13; the resolved config and log
+confirm the 13-epoch schedule. The probe used matched-positive anchors and
+128-wide pre-logit features: 3,540 supervised rows from 327 cases (GGG2 2,041;
+GGG3 823; GGG4 301; GGG5 375).
 
 ```
-Point estimate: pending remote Phase 1 run
-95% patient bootstrap CI: pending remote Phase 1 run
-Gate: CI lower bound > 0.5 => proceed; otherwise record the null expectation
+Point estimate: 0.823680 (macro OvR AUROC)
+95% patient bootstrap CI: [0.774128, 0.866854]
+Split: seed 2026; fit 235 patients / 2,460 rows; evaluation (selection + calibration) 92 patients / 1,080 rows
+Patient overlap: 0
+Split manifest SHA-256: 8645eaef1adc8dc9c0e3c7696fbc43a3befffe173cc91640795060cc2402dda0
+Bootstrap: 2,000 / 2,000 valid resamples (seed 2026)
+Gate: supports proceeding (CI lower bound > 0.5)
 ```
 
-Either result leaves the build unchanged. A lower bound at or below 0.5 is
-evidence that the encoder does not encode grade and makes a null combined run
-the expected outcome.
+This result supports grade linear separability in the diagnostic features. It
+does not compare CORAL or data-augmentation arms. Either probe result leaves the
+locked build unchanged; a lower bound at or below 0.5 records the null
+expectation.
 
 ## Fold-0 detection safety gate and fallback
 

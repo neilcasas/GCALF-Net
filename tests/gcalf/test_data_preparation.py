@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from gcalf_data.prepare_picai import build_tiny_task, dataset_json, load_splits
+from gcalf_data.prepare_picai import TASK2202, build_task, build_tiny_task, dataset_json, load_splits
 
 
 def test_dataset_metadata_declares_single_cspca_foreground_class():
@@ -18,6 +18,19 @@ def test_load_splits_requires_five_train_validation_folds(tmp_path):
     split_path.write_text(json.dumps([{"train": [], "val": []}]))
     with pytest.raises(ValueError, match="five folds"):
         load_splits(split_path)
+
+
+def test_task2202_builder_requires_grade_preserving_normalization(tmp_path):
+    labels_root = tmp_path / "picai_labels"
+    (labels_root / "clinical_information").mkdir(parents=True)
+    (labels_root / "clinical_information" / "marksheet.csv").write_text("patient_id,study_id,case_ISUP\n")
+    (labels_root / "csPCa_lesion_delineations" / "human_expert" / "Pooch25").mkdir(parents=True)
+    task_dir = tmp_path / TASK2202
+    task_dir.mkdir()
+
+    with pytest.raises(ValueError, match=f"{TASK2202} requires --grade-preserving-normalization"):
+        build_task([], labels_root, task_dir, tmp_path / "splits.json", tmp_path / "work",
+                   task_name=TASK2202)
 
 
 def _write_source_case(task_dir: Path, case_id: str, grades):

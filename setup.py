@@ -96,6 +96,7 @@ setup(
     name='nndet',
     version="v0.1",
     packages=find_packages(),
+    package_data={"gcalf_data": ["task2202_preprocessing.json"]},
     # include_package_data=True,
     test_suite="unittest",
     long_description=readme,

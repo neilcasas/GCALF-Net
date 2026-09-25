@@ -179,6 +179,64 @@ def test_preprocess_case_produces_matching_geometry_and_rejects_bad_mask_values(
     assert crop_strategy == "gland"
 
 
+def test_task2202_fixed_adc_mapping_and_fov_exclusion_from_gland_statistics():
+    image = lambda array: _image(np.asarray(array, dtype=np.float32))
+    t2w = image([[[10, 20, 1000], [30, 40, 0]]])
+    adc = image([[[1000, 1500, 2000], [3000, 4000, 5000]]])
+    hbv = image([[[10, 20, 10000], [30, 40, 9000]]])
+    gland = np.array([[[1, 1, 1], [0, 0, 0]]], dtype=bool)
+    fovs = [
+        _mask_image(np.array([[[1, 1, 0], [1, 1, 0]]], dtype=np.uint8)),
+        _mask_image(np.array([[[1, 1, 0], [1, 1, 0]]], dtype=np.uint8)),
+        _mask_image(np.array([[[1, 1, 0], [1, 1, 0]]], dtype=np.uint8)),
+    ]
+
+    (out_t2w, out_adc, out_hbv), coverage = preprocessing._normalize_task2202(
+        t2w, adc, hbv, gland, fovs, preprocessing.load_task2202_config())
+
+    t2w_values = sitk.GetArrayFromImage(out_t2w)
+    np.testing.assert_allclose(t2w_values[0, 0, :2], [-1.0, 1.0])
+    assert t2w_values[0, 0, 2] == 0.0
+    adc_values = sitk.GetArrayFromImage(out_adc)
+    np.testing.assert_allclose(adc_values[0, 0, :2], [0.0, 1.0])
+    assert adc_values[0, 0, 2] == 0.0
+    hbv_values = sitk.GetArrayFromImage(out_hbv)
+    assert hbv_values[0, 0, 2] == 0.0
+    np.testing.assert_allclose(hbv_values[0, 0, :2], [-1.0 / 6.0, 1.0 / 6.0], atol=1e-7)
+    assert coverage == {"t2w": pytest.approx(4.0 / 6.0), "adc": pytest.approx(4.0 / 6.0),
+                        "hbv": pytest.approx(4.0 / 6.0)}
+
+
+def test_task2202_adc_mapping_is_fixed_and_clips_high_values():
+    images = [_image(np.array([[[1, 2, 3]]], dtype=np.float32)) for _ in range(3)]
+    adc = _image(np.array([[[0, 1000, 3000]]], dtype=np.float32))
+    changed_case_adc = _image(np.array([[[500, 1000, 4000]]], dtype=np.float32))
+    gland = np.ones((1, 1, 3), dtype=bool)
+    fov = _mask_image(np.ones((1, 1, 3), dtype=np.uint8))
+    config = preprocessing.load_task2202_config()
+
+    first = preprocessing._normalize_task2202(images[0], adc, images[2], gland,
+                                               [fov, fov, fov], config)[0][1]
+    second = preprocessing._normalize_task2202(images[0], changed_case_adc, images[2], gland,
+                                                [fov, fov, fov], config)[0][1]
+
+    first_values = sitk.GetArrayFromImage(first)
+    second_values = sitk.GetArrayFromImage(second)
+    np.testing.assert_allclose(first_values.ravel(), [-2.0, 0.0, 4.0])
+    np.testing.assert_allclose(second_values.ravel(), [-1.0, 0.0, 4.0])
+    assert first_values[0, 0, 1] == second_values[0, 0, 1]
+
+
+def test_fov_mask_uses_image_geometry_even_when_voxels_are_zero():
+    source = _image(np.zeros((2, 3, 4), dtype=np.float32))
+    reference = preprocessing.build_target_reference(source, target_slice_spacing=1.0)
+
+    coverage = sitk.GetArrayFromImage(preprocessing.resample_fov_to_reference(source, reference))
+
+    assert coverage.shape == (2, 3, 4)
+    assert np.all(coverage == 1)
+
+
 def test_preprocess_case_rejects_unsupported_mask_values():
     t2w = _image(np.random.RandomState(0).normal(100, 10, (8, 10, 10)).astype(np.float32), spacing=(0.5, 0.5, 3.0))
     adc = _image(np.random.RandomState(1).normal(50, 5, (8, 10, 10)).astype(np.float32), spacing=(0.5, 0.5, 3.0))

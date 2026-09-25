@@ -16,6 +16,7 @@ limitations under the License.
 
 from typing import Sequence, List
 from loguru import logger
+import numpy as np
 
 from nndet.io.augmentation.base import AugmentationSetup, get_patch_size
 from nndet.utils.info import SuppressPrint
@@ -59,6 +60,37 @@ with SuppressPrint():
         )
 
 from nndet.io.augmentation import AUGMENTATION_REGISTRY
+
+
+class ChannelSelectiveIntensityTransform:
+    """Apply one batchgenerators intensity transform to selected data channels."""
+
+    def __init__(self, transform, channels):
+        self.transform = transform
+        self.channels = tuple(int(channel) for channel in channels)
+        if len(set(self.channels)) != len(self.channels) or any(channel < 0 for channel in self.channels):
+            raise ValueError(f"Intensity channels must be unique non-negative indices, got {self.channels}")
+
+    def __call__(self, **data_dict):
+        data = data_dict.get("data")
+        if not isinstance(data, np.ndarray) or data.ndim < 3:
+            raise ValueError("Channel-selective intensity transforms require a batched data array")
+        if any(channel >= data.shape[1] for channel in self.channels):
+            raise ValueError(f"Intensity channels {self.channels} exceed input channel count {data.shape[1]}")
+        if not self.channels:
+            return data_dict
+        transformed_input = dict(data_dict)
+        transformed_input["data"] = data[:, self.channels].copy()
+        transformed = self.transform(**transformed_input)
+        result = data.copy()
+        result[:, self.channels] = transformed["data"]
+        data_dict["data"] = result
+        return data_dict
+
+
+def _intensity_transform(transform, params):
+    channels = params.get("intensity_channels")
+    return transform if channels is None else ChannelSelectiveIntensityTransform(transform, channels)
 
 
 @AUGMENTATION_REGISTRY.register
@@ -241,33 +273,33 @@ class BaseMoreAug(NoAug):
 
         # we need to put the color augmentations after the dummy 2d part (if applicable). Otherwise the overloaded color
         # channel gets in the way
-        tr_transforms.append(GaussianNoiseTransform(p_per_sample=0.1))
-        tr_transforms.append(GaussianBlurTransform((0.5, 1.),
+        tr_transforms.append(_intensity_transform(GaussianNoiseTransform(p_per_sample=0.1), self.params))
+        tr_transforms.append(_intensity_transform(GaussianBlurTransform((0.5, 1.),
                                                    different_sigma_per_channel=True,
                                                    p_per_sample=0.2,
-                                                   p_per_channel=0.5))
-        tr_transforms.append(BrightnessMultiplicativeTransform(multiplier_range=(0.75, 1.25),
-                                                               p_per_sample=0.15))
+                                                   p_per_channel=0.5), self.params))
+        tr_transforms.append(_intensity_transform(BrightnessMultiplicativeTransform(
+            multiplier_range=(0.75, 1.25), p_per_sample=0.15), self.params))
         if self.params.get("do_additive_brightness"):
-            tr_transforms.append(BrightnessTransform(
+            tr_transforms.append(_intensity_transform(BrightnessTransform(
                 self.params.get("additive_brightness_mu"),
                 self.params.get("additive_brightness_sigma"),
                 True,
                 p_per_sample=self.params.get("additive_brightness_p_per_sample"),
-                p_per_channel=self.params.get("additive_brightness_p_per_channel")))
-        tr_transforms.append(ContrastAugmentationTransform(p_per_sample=0.15))
+                p_per_channel=self.params.get("additive_brightness_p_per_channel")), self.params))
+        tr_transforms.append(_intensity_transform(ContrastAugmentationTransform(p_per_sample=0.15), self.params))
 
-        tr_transforms.append(GammaTransform(
+        tr_transforms.append(_intensity_transform(GammaTransform(
             self.params.get("gamma_range"), True, True, retain_stats=self.params.get("gamma_retain_stats"),
-            p_per_sample=0.1))  # inverted gamma
+            p_per_sample=0.1), self.params))  # inverted gamma
 
         if self.params.get("do_gamma"):
-            tr_transforms.append(GammaTransform(
+            tr_transforms.append(_intensity_transform(GammaTransform(
                 self.params.get("gamma_range"),
                 False, 
                 True,
                 retain_stats=self.params.get("gamma_retain_stats"),
-                p_per_sample=self.params["p_gamma"]))
+                p_per_sample=self.params["p_gamma"]), self.params))
         if self.params.get("do_mirror") or self.params.get("mirror"):
             tr_transforms.append(MirrorTransform(self.params.get("mirror_axes")))
         if self.params.get("use_mask_for_norm"):

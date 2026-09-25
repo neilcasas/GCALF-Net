@@ -112,6 +112,7 @@ class GenericPreprocessor:
                  transpose_forward: Sequence[int],
                  intensity_properties: Dict[int, Dict] = None,
                  resample_anisotropy_threshold: float = 3.,
+                 order_data: int = 3,
                  ):
         """
         Preprocess data
@@ -132,6 +133,9 @@ class GenericPreprocessor:
             :self:`data_id`: unique identifier of GenericPreprocessor
         """
         self.resample_anisotropy_threshold = resample_anisotropy_threshold
+        if int(order_data) not in range(6):
+            raise ValueError(f"order_data must be between 0 and 5, got {order_data}")
+        self.order_data = int(order_data)
         self.intensity_properties = intensity_properties
         self.transpose_forward = list(transpose_forward)
         self.use_mask_for_norm = use_mask_for_norm
@@ -380,7 +384,7 @@ class GenericPreprocessor:
                                      seg,
                                      original_spacing,
                                      target_spacing,
-                                     order_data=3,
+                                     order_data=self.order_data,
                                      order_seg=0,
                                      force_separate_z=False,
                                      order_z_data=9999,

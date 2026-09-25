@@ -1,0 +1,25 @@
+{
+  "task": "Task2202_PICAI_csPCa",
+  "variant": "grade_preserving_v1",
+  "normalization": {
+    "adc": {
+      "clip": [0, 3000],
+      "offset": 1000,
+      "scale": 500
+    },
+    "hbv": {
+      "gland_ratio_clip": [0, 10],
+      "offset": 1,
+      "scale": 2,
+      "reference_mask": "Bosma22b_whole_gland"
+    },
+    "t2w": {
+      "statistics_mask": "Bosma22b_whole_gland"
+    },
+    "out_of_fov_fill": 0
+  },
+  "resampling": {
+    "images_order": 1,
+    "masks_order": 0
+  }
+}

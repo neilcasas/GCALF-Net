@@ -34,6 +34,7 @@ class AbstractPlanner(ABC):
         """
         super().__init__()
         self.preprocessed_output_dir = Path(preprocessed_output_dir)
+        self.task_name = self.preprocessed_output_dir.parent.name
 
         self.transpose_forward = None
         self.transpose_backward = None
@@ -172,6 +173,7 @@ class AbstractPlanner(ABC):
             'mode': mode,
             'target_spacing': target_spacing,
             'normalization_schemes': normalization_schemes,
+            'order_data': 1 if self.task_name == "Task2202_PICAI_csPCa" else 3,
             'use_mask_for_norm': use_nonzero_mask_for_normalization,
             'anisotropy_threshold': self.anisotropy_threshold,
             'resample_anisotropy_threshold': self.resample_anisotropy_threshold,
@@ -274,6 +276,9 @@ class AbstractPlanner(ABC):
         schemes = OrderedDict()
         modalities = self.data_properties['modalities']
         num_modalities = len(list(modalities.keys()))
+
+        if self.task_name == "Task2202_PICAI_csPCa":
+            return OrderedDict((i, "raw") for i in range(num_modalities))
 
         for i in range(num_modalities):
             if modalities[i] == "CT":

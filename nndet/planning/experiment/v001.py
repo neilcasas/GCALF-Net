@@ -99,6 +99,7 @@ class D3V001(AbstractPlanner):
             transpose_forward=plan['transpose_forward'],
             intensity_properties=plan['dataset_properties']['intensity_properties'],
             resample_anisotropy_threshold=plan['resample_anisotropy_threshold'],
+            order_data=plan.get('order_data', 3),
         )
         return preprocessor
 

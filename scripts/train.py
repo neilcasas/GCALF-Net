@@ -354,6 +354,10 @@ def _train(
         precision=cfg["trainer_cfg"]["precision"],
         benchmark=cfg["trainer_cfg"]["benchmark"],
         deterministic=cfg["trainer_cfg"]["deterministic"],
+        # Opt-in per run config; absent (None) reproduces Lightning's default
+        # of no clipping, so runs that don't set this are unaffected.
+        gradient_clip_val=cfg["trainer_cfg"].get("gradient_clip_val"),
+        gradient_clip_algorithm=cfg["trainer_cfg"].get("gradient_clip_algorithm", "norm"),
         callbacks=callbacks,
         logger=pl_logger,
         max_epochs=module.max_epochs,

@@ -1,0 +1,53 @@
+# @package __global__
+defaults:
+  - gcalf_caf
+
+# Final grade configuration applied to the caf architecture arm: CORAL
+# and lesion transfer are one declared intervention (see gcalf_final.yaml,
+# docs/adr/0005-final-grade-configuration.md). Kept identical to
+# gcalf_final.yaml's override block; only the base architecture differs.
+trainer_cfg:
+  grade_class_weight_source: "anchor"
+  # Measured by the <=250-batch Phase 1 post-paste telemetry
+  # (scripts/measure_transfer_anchor_telemetry.py), fold 0, seed 2026,
+  # 2026-09-23: 250/250 batches observed, 319 paste attempts, 68 succeeded
+  # (53 rejected_collision, 198 rejected_anatomy). GGG2, GGG3, GGG4, GGG5.
+  # Evidence: /workspace/evidence/phase1-telemetry-20260924-p1/ (Vast
+  # instance; not durable -- copy off-box if this needs to be re-verified).
+  grade_anchor_class_counts: [5425, 2452, 889, 1366]
+
+augment_cfg:
+  dataloader: "DataLoader{}DLesionTransfer"
+  dataloader_kwargs:
+    grade_balanced_sampling: false
+    lesion_transfer_cfg:
+      enabled: true
+      bank_dir: ${oc.env:GCALF_LESION_BANK_DIR, null}
+      source_grades: [4, 5]
+      p_paste: 0.5
+      max_pastes_per_patch: 1
+      region_mode: dilated
+      dilation_vox: 3
+      feather_sigma: 1.0
+      zone_match: prefer
+      min_gland_frac: 0.95
+      min_zone_frac: 0.50
+      max_placement_attempts: 8
+      instance_id_offset: 10000
+      jitter_channels: [0, 2]
+      shuffle_labels: false
+      spatial:
+        p_rot: 0.5
+        rot_range_deg: 30
+        p_scale: 0.5
+        scale_range: [0.8, 1.2]
+        p_flip: 0.5
+        flip_axes: [2]
+      intensity:
+        p_gamma: 0.3
+        gamma_range: [0.8, 1.25]
+        p_blur: 0.2
+
+model_cfg:
+  head_grade_kwargs:
+    grade_loss_type: coral

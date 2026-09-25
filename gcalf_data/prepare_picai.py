@@ -27,6 +27,7 @@ from gcalf_data.audit_unifocal import run_audit
 from gcalf_data.build_labels import inject_grade_metadata
 
 DEFAULT_TASK = "Task2201_PICAI_csPCa"
+TASK2202 = "Task2202_PICAI_csPCa"
 TINY_NUM_MODALITIES = 3
 _MODALITY_SUFFIXES = ("t2w", "adc", "hbv")
 _WHOLE_GLAND_SOURCE = "Bosma22b"  # the PI-CAI maintainers' own AI segmentation; Guerbet23 also covers all 1,500 cases
@@ -139,6 +140,7 @@ def build_task(
     splits_json: Path,
     work_dir: Path,
     task_name: str = DEFAULT_TASK,
+    grade_preserving_normalization: bool = False,
 ) -> None:
     """Preprocess every PI-CAI case (PHASE_1_data_pipeline.md Sec 1.2) and
     assemble the nnDetection csPCa task."""
@@ -150,6 +152,10 @@ def build_task(
         raise ValueError("labels_root must be the picai_labels checkout")
     if task_dir.exists() and any(task_dir.iterdir()):
         raise FileExistsError(f"Refusing to merge into an existing task directory: {task_dir}")
+    if grade_preserving_normalization and task_name != TASK2202:
+        raise ValueError(f"Grade-preserving normalization is reserved for {TASK2202}")
+    if task_name == TASK2202 and not grade_preserving_normalization:
+        raise ValueError(f"{TASK2202} requires --grade-preserving-normalization")
 
     splits = load_splits(splits_json)
     case_ids = sorted({case_id for split in splits for key in ("train", "val") for case_id in split[key]})
@@ -166,6 +172,7 @@ def build_task(
     total_cases = len(case_ids)
     crop_strategy_exceptions: Dict[str, str] = {}
     crop_retention_records = []
+    fov_coverage_records = {}
     for index, case_id in enumerate(case_ids, start=1):
         patient_dir = patient_index.get(patient_id(case_id))
         if patient_dir is None:
@@ -181,8 +188,11 @@ def build_task(
         whole_gland = sitk.ReadImage(str(whole_gland_path))
 
         t2w, adc, hbv, lesion_mask, crop_strategy, retention = preprocessing.preprocess_case_with_retention(
-            t2w, adc, hbv, lesion_mask, whole_gland
+            t2w, adc, hbv, lesion_mask, whole_gland,
+            grade_preserving=grade_preserving_normalization,
         )
+        if grade_preserving_normalization:
+            fov_coverage_records[case_id] = retention["fov_coverage"]
         retention_record = make_record(case_id, crop_strategy, retention)
         crop_retention_records.append(retention_record)
 
@@ -231,6 +241,13 @@ def build_task(
 
     with (task_dir / "crop_strategy_exceptions.json").open("w") as file:
         json.dump(crop_strategy_exceptions, file, indent=2, sort_keys=True)
+    if grade_preserving_normalization:
+        with (task_dir / "fov_coverage.json").open("w") as file:
+            json.dump(fov_coverage_records, file, indent=2, sort_keys=True)
+        with preprocessing.TASK2202_CONFIG_PATH.open() as file:
+            config = json.load(file)
+        with (task_dir / "preprocessing_config.json").open("w") as file:
+            json.dump(config, file, indent=2, sort_keys=True)
     if crop_strategy_exceptions:
         print(
             f"{len(crop_strategy_exceptions)} case(s) needed a non-gland-centered crop "
@@ -413,6 +430,10 @@ def main() -> None:
     build.add_argument("--splits-json", type=Path, required=True, help="official picai_nnunet splits.json")
     build.add_argument("--work-dir", type=Path, required=True, help="intermediate nnU-Net workspace")
     build.add_argument("--task-name", default=DEFAULT_TASK)
+    build.add_argument(
+        "--grade-preserving-normalization", action="store_true",
+        help=f"apply the fixed Task2202 quantitative normalization (requires --task-name {TASK2202})",
+    )
 
     splits = subparsers.add_parser("install-splits", help="write nnDetection's splits_final.pkl")
     splits.add_argument("--task-dir", type=Path, required=True)
@@ -431,6 +452,7 @@ def main() -> None:
             splits_json=args.splits_json,
             work_dir=args.work_dir,
             task_name=args.task_name,
+            grade_preserving_normalization=args.grade_preserving_normalization,
         )
     elif args.command == "install-splits":
         print(install_splits(args.task_dir, args.preprocessed_dir))

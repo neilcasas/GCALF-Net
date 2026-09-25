@@ -1,0 +1,7 @@
+defaults:
+  - base_more
+  - _self_
+
+name: "task2202"
+order_data: 1
+intensity_channels: [0, 2]

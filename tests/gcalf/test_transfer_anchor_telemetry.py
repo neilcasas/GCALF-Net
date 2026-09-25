@@ -1,7 +1,11 @@
 import pytest
 import torch
 
-from scripts.measure_transfer_anchor_telemetry import _move_tensors_to_device, summarize_counts
+from scripts.measure_transfer_anchor_telemetry import (
+    _move_tensors_to_device,
+    resolve_train_config,
+    summarize_counts,
+)
 
 
 def test_summarize_counts_reports_the_exact_four_measured_counts_in_order():
@@ -55,3 +59,10 @@ def test_move_tensors_to_device_moves_tensors_and_passes_through_metadata():
 
 def test_move_tensors_to_device_does_not_recurse_on_a_bare_string():
     assert _move_tensors_to_device("10005_1000005", "cpu") == "10005_1000005"
+
+
+def test_task2202_telemetry_selects_its_transfer_config():
+    assert resolve_train_config("Task2201_PICAI_csPCa") == "gcalf_final"
+    assert resolve_train_config("Task2202_PICAI_csPCa") == "gcalf_task2202"
+    with pytest.raises(ValueError, match="requires train=gcalf_task2202"):
+        resolve_train_config("Task2202_PICAI_csPCa", "gcalf_final")

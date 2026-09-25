@@ -36,6 +36,13 @@ def _seed_everything(seed):
         torch.cuda.manual_seed_all(seed)
 
 
+def _seed_lesion(seed, case_id, instance_id):
+    """Make the foreground patch draw repeatable across checkpoint exports."""
+    identity = f"{case_id}:{int(instance_id)}".encode("utf-8")
+    lesion_seed = (int(seed) + int.from_bytes(hashlib.sha256(identity).digest()[:4], "little")) % (2 ** 32)
+    _seed_everything(lesion_seed)
+
+
 def _supervised_tasks(dataset):
     tasks = []
     expected_cases = set()
@@ -85,6 +92,7 @@ def _export_one(module, loader, transform, case_id, instance_id, batch_num, devi
         "target_seg": batch["target"][:, 0].to(device),
         "target_grades": [value.to(device) for value in batch["grades"]],
         "target_grade_supervised": [value.to(device) for value in batch["grade_supervised"]],
+        "target_instance_ids": [value.to(device) for value in batch["present_instances"]],
         "grade_class_weights": module.grade_class_weights,
         "export_grade_features": True,
     }
@@ -100,26 +108,40 @@ def _export_one(module, loader, transform, case_id, instance_id, batch_num, devi
     exported = prediction["grade_feature_export"]
     image_indices = exported["image_indices"].cpu().tolist()
     case_ids = [batch["keys"][int(index)] for index in image_indices]
+    instance_ids = exported["instance_ids"].cpu().numpy()
+    selected = instance_ids == int(instance_id)
     return (
-        exported["features"].cpu().numpy(),
-        exported["grades"].cpu().numpy(),
-        exported["supervised_mask"].cpu().numpy(),
-        np.asarray(case_ids, dtype=str),
+        exported["features"].cpu().numpy()[selected],
+        exported["grades"].cpu().numpy()[selected],
+        exported["supervised_mask"].cpu().numpy()[selected],
+        np.asarray(case_ids, dtype=str)[selected],
+        instance_ids[selected],
+        exported["anchor_ious"].cpu().numpy()[selected],
     )
 
 
-def _validate_export(features, grades, supervised, case_ids):
+def _validate_export(features, grades, supervised, case_ids, instance_ids=None, anchor_ious=None):
     rows = len(features)
     if features.ndim != 2 or features.shape[1] == 0:
         raise ValueError(f"Expected nonempty feature vectors, got shape {features.shape}")
     if any(np.asarray(values).ndim != 1 or len(values) != rows
            for values in (grades, supervised, case_ids)):
         raise ValueError("Exported feature rows, grades, masks, and case IDs are misaligned")
+    if instance_ids is not None and (np.asarray(instance_ids).ndim != 1 or len(instance_ids) != rows):
+        raise ValueError("Exported instance IDs must align with feature rows")
+    if anchor_ious is not None and (np.asarray(anchor_ious).ndim != 1 or len(anchor_ious) != rows):
+        raise ValueError("Exported anchor IoUs must align with feature rows")
     if not np.isfinite(features).all():
         raise ValueError("Exported features contain NaN or infinite values")
     supervised = np.asarray(supervised, dtype=bool)
     if not supervised.any():
         raise ValueError("Export contains no grade-supervised matched positive anchors")
+    if instance_ids is not None and np.any(np.asarray(instance_ids)[supervised] <= 0):
+        raise ValueError("A supervised exported row has a non-positive instance ID")
+    if anchor_ious is not None:
+        anchor_ious = np.asarray(anchor_ious, dtype=np.float64)
+        if not np.isfinite(anchor_ious).all() or np.any((anchor_ious < 0) | (anchor_ious > 1)):
+            raise ValueError("Exported anchor IoUs must be finite values in [0, 1]")
     invalid = sorted(set(np.asarray(grades)[supervised].tolist()) - set(GRADE_VALUES))
     if invalid:
         raise ValueError(f"Supervised rows contain invalid grades: {invalid}")
@@ -183,19 +205,21 @@ def main():
             raise ValueError(f"Fold-0 data has no smoke lesion for GGG {missing}")
         tasks = [selected[grade] for grade in GRADE_VALUES]
 
-    feature_rows, grade_rows, mask_rows, case_rows = [], [], [], []
+    feature_rows, grade_rows, mask_rows, case_rows, instance_rows, iou_rows = [], [], [], [], [], []
     seen_tasks = set()
     loaders = {}
     for batch_num, (case_id, instance_id, target_grade) in enumerate(tasks):
+        _seed_lesion(args.seed, case_id, instance_id)
         if case_id not in loaders:
             loaders[case_id] = _case_loader(datamodule, case_id, datamodule.dataset_tr[case_id])
-        features, grades, masks, case_ids = _export_one(
+        features, grades, masks, case_ids, instance_ids, anchor_ious = _export_one(
             module, loaders[case_id], transform,
             case_id, instance_id, batch_num, args.device)
         if not len(features):
             raise RuntimeError(f"No sampled positive anchor matched {case_id} instance {instance_id}")
         supervised = np.asarray(masks, dtype=bool)
-        if not np.any(supervised & (np.asarray(grades) == target_grade)):
+        if not np.any(supervised & (np.asarray(grades) == target_grade)
+                       & (np.asarray(instance_ids) == instance_id)):
             raise RuntimeError(
                 f"Selected GGG{target_grade} lesion {case_id} instance {instance_id} "
                 "produced no supervised matched-positive feature"
@@ -206,6 +230,8 @@ def main():
         grade_rows.append(grades)
         mask_rows.append(masks)
         case_rows.append(case_ids)
+        instance_rows.append(instance_ids)
+        iou_rows.append(anchor_ious)
         seen_tasks.add((case_id, instance_id))
 
     if not args.smoke_one_per_grade:
@@ -217,7 +243,9 @@ def main():
     grades = np.concatenate(grade_rows).astype(np.int64, copy=False)
     supervised = np.concatenate(mask_rows).astype(bool, copy=False)
     case_ids = np.concatenate(case_rows).astype(str, copy=False)
-    _validate_export(features, grades, supervised, case_ids)
+    instance_ids = np.concatenate(instance_rows).astype(np.int64, copy=False)
+    anchor_ious = np.concatenate(iou_rows).astype(np.float32, copy=False)
+    _validate_export(features, grades, supervised, case_ids, instance_ids, anchor_ious)
     counts = {f"GGG{grade}": int(np.sum(supervised & (grades == grade))) for grade in GRADE_VALUES}
     exported_cases = sorted(set(case_ids[supervised].tolist()))
     missing_cases = expected_cases - set(exported_cases)
@@ -232,9 +260,11 @@ def main():
         grades=grades,
         supervised_mask=supervised,
         case_ids=case_ids,
+        instance_ids=instance_ids,
+        anchor_ious=anchor_ious,
     )
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source_checkpoint": str(args.checkpoint),
         "source_checkpoint_sha256": _sha256(args.checkpoint),
         "source_checkpoint_epoch_zero_based": checkpoint.get("epoch"),
@@ -248,6 +278,7 @@ def main():
         "supervised_rows_by_grade": counts,
         "supervised_case_count": len(exported_cases),
         "matched_positive_anchor_path": True,
+        "anchor_iou_exported": True,
         "lesion_transfer_enabled": False,
         "pre_logit_feature_width": int(features.shape[1]),
     }

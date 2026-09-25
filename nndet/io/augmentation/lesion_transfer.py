@@ -237,7 +237,9 @@ class LesionBank:
         allowed_patients = {_patient_id(case_id) for case_id in allowed}
         self.records = []
         self.by_grade = defaultdict(list)
-        self.by_grade_zone = defaultdict(lambda: defaultdict(list))
+        # Keep only pickleable built-in factories: the bank is sent to spawned
+        # augmentation workers, and a local lambda cannot be pickled there.
+        self.by_grade_zone = defaultdict(dict)
         dropped = 0
         for record in records:
             if not isinstance(record, Mapping):
@@ -254,7 +256,8 @@ class LesionBank:
             self.records.append(normalized)
             self.by_grade[normalized["grade"]].append(normalized)
             if normalized["zone"] is not None:
-                self.by_grade_zone[normalized["grade"]][normalized["zone"]].append(normalized)
+                grade_zones = self.by_grade_zone[normalized["grade"]]
+                grade_zones.setdefault(normalized["zone"], []).append(normalized)
 
         self.max_cached = int(max_cached)
         self._cache: "OrderedDict[Tuple[str, int], Tuple[np.ndarray, np.ndarray]]" = OrderedDict()

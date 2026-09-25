@@ -1,5 +1,6 @@
 import json
 import pickle
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -11,6 +12,9 @@ from gcalf_data.sanity_checks import (
     validate_splits,
     validate_task,
 )
+from nndet.preprocessing import preprocessor as preprocessor_module
+from nndet.preprocessing.preprocessor import GenericPreprocessor
+from nndet.planning.experiment.base import AbstractPlanner
 
 
 def test_validate_splits_rejects_patient_leakage():
@@ -147,3 +151,59 @@ def test_validate_plan_requires_three_modalities_and_five_encoder_levels(tmp_pat
         pickle.dump(plan, file)
     with pytest.raises(AssertionError, match="four encoder transitions"):
         validate_plan(plan_path)
+
+
+def test_task2202_plan_accepts_only_raw_normalization_and_linear_resampling(tmp_path):
+    plan_path = tmp_path / "D3V001_3d.pkl"
+    plan = {
+        "patch_size": [32, 128, 128],
+        "target_spacing": [3.0, 0.5, 0.5],
+        "normalization_schemes": {0: "raw", 1: "raw", 2: "raw"},
+        "use_mask_for_norm": {0: False, 1: False, 2: False},
+        "order_data": 1,
+        "architecture": {
+            "in_channels": 3,
+            "classifier_classes": 1,
+            "conv_kernels": [(3, 3, 3)] * 5,
+            "strides": [(2, 2, 2)] * 4,
+            "decoder_levels": [1, 2, 3, 4],
+        },
+    }
+    with plan_path.open("wb") as file:
+        pickle.dump(plan, file)
+
+    assert validate_plan(plan_path, task_name="Task2202_PICAI_csPCa")["order_data"] == 1
+    with pytest.raises(AssertionError):
+        validate_plan(plan_path, task_name="Task2201_PICAI_csPCa")
+
+
+def test_planner_uses_raw_only_for_task2202():
+    properties = {"modalities": {0: "T2W", 1: "ADC", 2: "HBV"}}
+    task2201 = SimpleNamespace(task_name="Task2201_PICAI_csPCa", data_properties=properties)
+    task2202 = SimpleNamespace(task_name="Task2202_PICAI_csPCa", data_properties=properties)
+
+    assert list(AbstractPlanner.determine_normalization(task2201).values()) == ["nonCT"] * 3
+    assert list(AbstractPlanner.determine_normalization(task2202).values()) == ["raw"] * 3
+
+
+def test_task2202_preprocessor_passes_linear_image_and_nearest_mask_orders(monkeypatch):
+    observed = {}
+
+    def fake_resample(data, seg, original_spacing, target_spacing, **kwargs):
+        observed.update(kwargs)
+        return data, seg
+
+    monkeypatch.setattr(preprocessor_module, "resample_patient", fake_resample)
+    preprocessor = GenericPreprocessor(
+        norm_scheme_per_modality={0: "raw", 1: "raw", 2: "raw"},
+        use_mask_for_norm={0: False, 1: False, 2: False},
+        transpose_forward=[0, 1, 2],
+        order_data=1,
+    )
+    preprocessor.resample(
+        np.zeros((3, 2, 4, 4), dtype=np.float32), np.zeros((1, 2, 4, 4), dtype=np.int16),
+        [3.0, 1.0, 1.0], [3.0, 0.5, 0.5],
+    )
+
+    assert observed["order_data"] == 1
+    assert observed["order_seg"] == 0

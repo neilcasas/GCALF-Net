@@ -1,0 +1,5 @@
+# @package __global__
+defaults:
+  - gcalf_baseline
+  - override /train/augmentation@augmentation: task2202
+  - _self_

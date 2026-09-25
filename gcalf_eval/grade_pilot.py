@@ -101,3 +101,53 @@ def bootstrap_metrics(grades, predictions, probabilities, patients, samples=2000
         rows.append(summarize_grade_matches(grades[index].tolist(), predictions[index].tolist(), 0, 0,
                                            matched_probabilities=probabilities[index].tolist()))
     return rows
+
+
+def paired_bootstrap_auc_delta(grades, probabilities_a, probabilities_b, patients,
+                               samples=2000, seed=2026):
+    """Patient-cluster bootstrap for paired macro OvR AUROC differences (A - B)."""
+    grades = np.asarray(grades, dtype=np.int64)
+    probabilities_a = np.asarray(probabilities_a, dtype=np.float64)
+    probabilities_b = np.asarray(probabilities_b, dtype=np.float64)
+    patients = np.asarray(patients, dtype=str)
+    if (probabilities_a.shape != probabilities_b.shape or probabilities_a.shape != (len(grades), 4)
+            or patients.shape != grades.shape or not len(grades)):
+        raise ValueError("Paired grades, four-class probabilities, and patients must align")
+    if not np.isfinite(probabilities_a).all() or not np.isfinite(probabilities_b).all():
+        raise ValueError("Paired probabilities must be finite")
+
+    def macro_auc(selected_grades, selected_probabilities):
+        predicted = selected_probabilities.argmax(axis=1) + GRADE_VALUES[0]
+        summary = summarize_grade_matches(
+            selected_grades.tolist(), predicted.tolist(), 0, 0,
+            matched_probabilities=selected_probabilities.tolist(),
+        )
+        return summary["grade_macro_ovr_auroc"]
+
+    point_a = macro_auc(grades, probabilities_a)
+    point_b = macro_auc(grades, probabilities_b)
+    if point_a is None or point_b is None:
+        raise ValueError("Paired cohort must define macro OvR AUROC in both conditions")
+    point_delta = float(point_a - point_b)
+
+    unique = np.unique(patients)
+    rng = np.random.RandomState(seed)
+    deltas = []
+    for _ in range(samples):
+        selected = rng.choice(unique, len(unique), replace=True)
+        index = np.concatenate([np.flatnonzero(patients == patient) for patient in selected])
+        auc_a = macro_auc(grades[index], probabilities_a[index])
+        auc_b = macro_auc(grades[index], probabilities_b[index])
+        if auc_a is not None and auc_b is not None:
+            deltas.append(auc_a - auc_b)
+    if not deltas:
+        raise ValueError("No paired patient-bootstrap resample defined macro OvR AUROC")
+    interval = np.percentile(np.asarray(deltas), [2.5, 97.5])
+    return {
+        "point_estimate": point_delta,
+        "patient_bootstrap_95_ci": [float(interval[0]), float(interval[1])],
+        "bootstrap_resamples": int(samples),
+        "bootstrap_valid_resamples": len(deltas),
+        "bootstrap_undefined_resamples": int(samples - len(deltas)),
+        "bootstrap_seed": int(seed),
+    }

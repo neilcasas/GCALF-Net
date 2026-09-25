@@ -2,7 +2,12 @@ import numpy as np
 import pytest
 
 from gcalf_eval.grade_pilot import make_split_manifest, patient_id
-from scripts.grade_feature_probe import _fit_and_bootstrap, assign_patient_roles, validate_export
+from scripts.grade_feature_probe import (
+    _fit_and_bootstrap,
+    aggregate_feature_readout,
+    assign_patient_roles,
+    validate_export,
+)
 
 
 def test_validate_export_keeps_feature_labels_masks_and_case_ids_aligned():
@@ -16,6 +21,25 @@ def test_validate_export_keeps_feature_labels_masks_and_case_ids_aligned():
     assert [len(value) for value in validated] == [4, 4, 4, 4]
     with pytest.raises(ValueError, match="misaligned"):
         validate_export(features, grades[:-1], supervised, case_ids)
+
+
+def test_anchor_and_pooled_readouts_group_by_case_and_instance():
+    features = np.asarray([[1.0, 0.0], [3.0, 0.0], [5.0, 2.0], [7.0, 2.0]])
+    grades = np.asarray([4, 4, 5, 5])
+    supervised = np.ones(4, dtype=bool)
+    case_ids = np.asarray(["10000_1"] * 4)
+    instance_ids = np.asarray([8, 8, 9, 9])
+    anchor_ious = np.asarray([0.2, 0.9, 0.8, 0.4])
+
+    anchor = aggregate_feature_readout(
+        features, grades, supervised, case_ids, instance_ids, anchor_ious, readout="anchor")
+    pooled = aggregate_feature_readout(
+        features, grades, supervised, case_ids, instance_ids, anchor_ious, readout="pooled")
+
+    np.testing.assert_array_equal(anchor[0], [[3.0, 0.0], [5.0, 2.0]])
+    np.testing.assert_array_equal(pooled[0], [[2.0, 0.0], [6.0, 2.0]])
+    np.testing.assert_array_equal(anchor[4], [8, 9])
+    np.testing.assert_array_equal(anchor[1], [4, 5])
 
 
 def test_seed_2026_manifest_keeps_patient_groups_disjoint(tmp_path):

@@ -5,7 +5,7 @@ ADR 0005 requires a fresh, no-more-than-250-batch Phase 1 measurement of the
 final (transfer-enabled) training configuration after the transfer-path
 fixes: persist the paste-rejection counters and a ``grade_anchor_counts.json``
 record, then replace the null ``trainer_cfg.grade_anchor_class_counts`` in
-``nndet/conf/train/gcalf_final.yaml`` with the four measured positive counts.
+the selected Task2201 or Task2202 final config with the four measured counts.
 This script performs exactly that measurement and nothing else -- it defines
 no pass/fail gate of its own, because ADR 0005 does not specify one for this
 step.
@@ -25,11 +25,19 @@ import random
 import re
 import sys
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, Optional, Sequence
 
 MAX_BATCHES = 250
 GRADE_KEYS = tuple(f"GGG{grade}" for grade in range(2, 6))
 CASE_ID_PATTERN = re.compile(r"\b\d{5}_\d{7}\b")
+TASK2202 = "Task2202_PICAI_csPCa"
+
+
+def resolve_train_config(task: str, requested: Optional[str] = None) -> str:
+    required = "gcalf_task2202" if task == TASK2202 else "gcalf_final"
+    if requested is not None and requested != required:
+        raise ValueError(f"{task} telemetry requires train={required}, got train={requested}")
+    return required
 
 
 def summarize_counts(counts: Iterable[int], batches: int) -> dict:
@@ -232,6 +240,8 @@ def _write_evidence(path: Path, payload: dict) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default="Task2201_PICAI_csPCa")
+    parser.add_argument("--train-config", choices=("gcalf_final", "gcalf_task2202"),
+                        help="must match the task; defaults to gcalf_task2202 for Task2202 and gcalf_final otherwise")
     parser.add_argument("--bank-dir", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--total-batches", type=int, default=MAX_BATCHES,
@@ -251,6 +261,7 @@ def main() -> int:
     from nndet.utils.config import compose
 
     args = parse_args()
+    train_config = resolve_train_config(args.task, args.train_config)
     if args.total_batches < 1 or args.total_batches > MAX_BATCHES:
         raise ValueError("--total-batches must be from 1 through 250")
     if not args.bank_dir.is_dir() or not (args.bank_dir / "bank_index.pkl").is_file():
@@ -265,7 +276,7 @@ def main() -> int:
 
     os.environ["GCALF_LESION_BANK_DIR"] = str(args.bank_dir.resolve())
     initialize_config_module(config_module="nndet.conf", version_base="1.1")
-    cfg = compose(args.task, "config.yaml", overrides=["train=gcalf_final", "exp.fold=0", "exp.seed=2026"])
+    cfg = compose(args.task, "config.yaml", overrides=[f"train={train_config}", "exp.fold=0", "exp.seed=2026"])
     _validate_config(cfg, args.bank_dir)
     plan = load_pickle(Path(str(cfg.host.plan_path)))
     data_dir = Path(cfg.host.preprocessed_output_dir) / plan["data_identifier"] / "imagesTr"
@@ -281,7 +292,7 @@ def main() -> int:
         args.repo_dir / "nndet/io/datamodule/bg_loader.py",
         args.repo_dir / "nndet/io/datamodule/bg_module.py",
         args.repo_dir / "nndet/io/augmentation/lesion_transfer.py",
-        args.repo_dir / "nndet/conf/train/gcalf_final.yaml",
+        args.repo_dir / f"nndet/conf/train/{train_config}.yaml",
     ]
     source_hashes = {str(path.relative_to(args.repo_dir)): _sha256(path) for path in source_paths}
     source_hashes["scripts/measure_transfer_anchor_telemetry.py"] = _sha256(Path(__file__).resolve())
@@ -307,6 +318,7 @@ def main() -> int:
     payload = {
         "protocol": "ADR-0005 Phase 1 post-paste anchor telemetry",
         "task": args.task,
+        "train_config": train_config,
         "fold": 0,
         "seed": args.seed,
         "batch_cap": args.total_batches,
@@ -325,7 +337,7 @@ def main() -> int:
         "grade_anchor_class_counts": payload["grade_anchor_class_counts"],
         "next_step": (
             "Paste grade_anchor_class_counts into trainer_cfg.grade_anchor_class_counts "
-            "in nndet/conf/train/gcalf_final.yaml"
+            f"in nndet/conf/train/{train_config}.yaml"
         ),
         "transfer_counters": payload["transfer_counters"],
         "bank_filter": payload["bank_filter"],

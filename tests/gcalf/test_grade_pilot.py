@@ -3,7 +3,12 @@ import pytest
 import torch
 import torch.nn as nn
 
-from gcalf_eval.grade_pilot import fit_temperature, make_split_manifest, temperature_scale
+from gcalf_eval.grade_pilot import (
+    fit_temperature,
+    make_split_manifest,
+    paired_bootstrap_auc_delta,
+    temperature_scale,
+)
 from nndet.training.grade_refit import freeze_grade_head
 
 
@@ -42,6 +47,22 @@ def test_manifest_stratifies_single_grade_patient_groups(tmp_path):
     manifest = make_split_manifest(grades, tmp_path / "split.json")
     assert all(all(support[str(grade)] for grade in range(2, 6))
                for support in manifest["grade_support"].values())
+
+
+def test_paired_patient_bootstrap_reports_reproducible_delta_on_synthetic_fixture():
+    grades = np.tile(np.asarray([2, 3, 4, 5]), 20)
+    patients = np.repeat(np.asarray([f"patient-{i}" for i in range(20)]), 4)
+    raw = np.full((len(grades), 4), 0.05, dtype=np.float64)
+    raw[np.arange(len(grades)), grades - 2] = 0.85
+    processed = np.full((len(grades), 4), 0.25, dtype=np.float64)
+
+    first = paired_bootstrap_auc_delta(grades, raw, processed, patients, samples=100, seed=2026)
+    second = paired_bootstrap_auc_delta(grades, raw, processed, patients, samples=100, seed=2026)
+
+    assert first == second
+    assert first["point_estimate"] == pytest.approx(0.5)
+    assert first["patient_bootstrap_95_ci"][0] == pytest.approx(0.5)
+    assert first["bootstrap_valid_resamples"] == 100
 
 
 def test_freezing_grade_head_leaves_detection_parameters_trainable():

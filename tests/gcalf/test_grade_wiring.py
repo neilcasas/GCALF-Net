@@ -8,6 +8,7 @@ Data-pipeline threading (raw label json -> boxes_file pickle -> training batch
 change to the preprocessing pickle format and is out of scope here; these
 tests exercise the model-side plumbing directly with hand-built targets.
 """
+import pytest
 import torch
 import torch.nn as nn
 
@@ -56,6 +57,26 @@ def test_matched_grades_align_with_iou_matches_and_mask_background():
     # False for it below, independent of what the gather returned.
     assert matched_grades[0].tolist() == [2, 2]
     assert matched_grade_supervised[0].tolist() == [True, False]
+
+
+def test_matched_anchor_feature_export_carries_instance_ids_and_iou():
+    model = _make_retina_net_for_matching(anchors_per_level=[4])
+    anchors = [torch.tensor([
+        [0., 0., 1., 1.],
+        [0.1, 0.1, 0.9, 0.9],
+        [5., 5., 6., 6.],
+        [9., 9., 10., 10.],
+    ])]
+    boxes = [torch.tensor([[0., 0., 1., 1.], [5., 5., 6., 6.]])]
+    grades = [torch.tensor([4, 5])]
+    supervised = [torch.tensor([True, True])]
+    instance_ids = [torch.tensor([11, 22])]
+
+    _, _, matched_ids, matched_ious = model.assign_grades_to_anchors(
+        anchors, boxes, grades, supervised, target_instance_ids=instance_ids)
+
+    assert matched_ids[0].tolist() == [11, 11, 22, 11]
+    assert matched_ious[0].tolist() == pytest.approx([1.0, 0.64, 1.0, 0.0])
 
 
 def test_no_ground_truth_boxes_yields_all_unsupervised():

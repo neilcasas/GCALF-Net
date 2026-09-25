@@ -162,9 +162,16 @@ class BaseRetinaNet(AbstractModel):
             # assign_grades_to_anchors, so unsupervised positives and all
             # negatives contribute zero grade loss and zero grade-head
             # gradient regardless of what pos_idx contains.
-            matched_grades, matched_grade_supervised = self.assign_grades_to_anchors(
-                anchors, target_boxes,
-                targets["target_grades"], targets["target_grade_supervised"])
+            if "target_instance_ids" in targets:
+                grade_targets = self.assign_grades_to_anchors(
+                    anchors, target_boxes,
+                    targets["target_grades"], targets["target_grade_supervised"],
+                    target_instance_ids=targets["target_instance_ids"])
+                matched_grades, matched_grade_supervised, matched_instance_ids, matched_anchor_ious = grade_targets
+            else:
+                grade_targets = self.assign_grades_to_anchors(
+                    anchors, target_boxes, targets["target_grades"], targets["target_grade_supervised"])
+                matched_grades, matched_grade_supervised = grade_targets
             batch_grades = torch.cat(matched_grades, dim=0)[pos_idx]
             batch_grade_supervised = torch.cat(matched_grade_supervised, dim=0)[pos_idx]
             grade_logits = pred_detection["grade_logits"][pos_idx]
@@ -211,6 +218,9 @@ class BaseRetinaNet(AbstractModel):
                 "supervised_mask": batch_grade_supervised.detach(),
                 "image_indices": image_indices.detach(),
             }
+            if "target_instance_ids" in targets:
+                prediction["grade_feature_export"]["instance_ids"] = torch.cat(matched_instance_ids)[pos_idx].detach()
+                prediction["grade_feature_export"]["anchor_ious"] = torch.cat(matched_anchor_ious)[pos_idx].detach()
 
         # self.save_matched_anchors(images=images, target_boxes=target_boxes,
         #                             anchors=anchors, pos_idx=pos_idx,
@@ -367,7 +377,10 @@ class BaseRetinaNet(AbstractModel):
                                  target_boxes: List[torch.Tensor],
                                  target_grades: List[torch.Tensor],
                                  target_grade_supervised: List[torch.Tensor],
-                                 ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+                                 target_instance_ids: Optional[List[torch.Tensor]] = None,
+                                 ) -> Union[Tuple[List[torch.Tensor], List[torch.Tensor]],
+                                            Tuple[List[torch.Tensor], List[torch.Tensor],
+                                                  List[torch.Tensor], List[torch.Tensor]]]:
         """
         Gather the GGG2-5 grade and grade_supervised flag matched to each
         anchor (ARCHITECTURE.md Sec 8), via the same IoU matching
@@ -395,8 +408,12 @@ class BaseRetinaNet(AbstractModel):
         """
         matched_grades = []
         matched_grade_supervised = []
-        for anchors_per_image, gt_boxes, gt_grades, gt_grade_supervised in zip(
-                anchors, target_boxes, target_grades, target_grade_supervised):
+        matched_instance_ids = []
+        matched_anchor_ious = []
+        if target_instance_ids is not None and len(target_instance_ids) != len(anchors):
+            raise ValueError("Target instance IDs must align with batch images")
+        targets = zip(anchors, target_boxes, target_grades, target_grade_supervised)
+        for image_index, (anchors_per_image, gt_boxes, gt_grades, gt_grade_supervised) in enumerate(targets):
             match_quality_matrix, matched_idxs = self.proposal_matcher(
                 gt_boxes, anchors_per_image,
                 num_anchors_per_level=self.anchor_generator.get_num_acnhors_per_level(),
@@ -405,19 +422,38 @@ class BaseRetinaNet(AbstractModel):
             if match_quality_matrix.numel() > 0:
                 grades_per_image = gt_grades[matched_idxs.clamp(min=0)].to(dtype=torch.long)
                 supervised_per_image = gt_grade_supervised[matched_idxs.clamp(min=0)].clone().to(dtype=torch.bool)
+                if target_instance_ids is not None:
+                    instance_ids_per_image = target_instance_ids[image_index]
+                    if len(instance_ids_per_image) != len(gt_boxes):
+                        raise ValueError("Target instance IDs must align with ground-truth boxes")
+                    matched_ids = instance_ids_per_image[matched_idxs.clamp(min=0)].to(dtype=torch.long)
+                    overlaps = box_utils.box_iou(anchors_per_image, gt_boxes)
+                    anchor_indices = torch.arange(len(anchors_per_image), device=anchors_per_image.device)
+                    matched_ious = overlaps[anchor_indices, matched_idxs.clamp(min=0)]
             else:
                 num_anchors_per_image = anchors_per_image.shape[0]
                 grades_per_image = torch.zeros(
                     num_anchors_per_image, dtype=torch.long, device=anchors_per_image.device)
                 supervised_per_image = torch.zeros(
                     num_anchors_per_image, dtype=torch.bool, device=anchors_per_image.device)
+                if target_instance_ids is not None:
+                    matched_ids = torch.zeros(num_anchors_per_image, dtype=torch.long, device=anchors_per_image.device)
+                    matched_ious = torch.zeros(num_anchors_per_image, dtype=torch.float32,
+                                               device=anchors_per_image.device)
 
             unmatched = (matched_idxs == self.proposal_matcher.BELOW_LOW_THRESHOLD) | \
                         (matched_idxs == self.proposal_matcher.BETWEEN_THRESHOLDS)
             supervised_per_image[unmatched] = False
+            if target_instance_ids is not None:
+                matched_ious[unmatched] = 0
 
             matched_grades.append(grades_per_image)
             matched_grade_supervised.append(supervised_per_image)
+            if target_instance_ids is not None:
+                matched_instance_ids.append(matched_ids)
+                matched_anchor_ious.append(matched_ious)
+        if target_instance_ids is not None:
+            return matched_grades, matched_grade_supervised, matched_instance_ids, matched_anchor_ious
         return matched_grades, matched_grade_supervised
 
     def postprocess_detections(self,

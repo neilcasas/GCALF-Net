@@ -182,7 +182,7 @@ def validate_held_out_grades(task_dir: Path, splits: List[Dict[str, List[str]]])
         assert not missing, f"Fold {fold} has no grade-supervised instances for {sorted(missing)}"
 
 
-def validate_plan(plan_path: Path) -> dict:
+def validate_plan(plan_path: Path, task_name: str = None) -> dict:
     with plan_path.open("rb") as file:
         plan = pickle.load(file)
     architecture = plan["architecture"]
@@ -194,7 +194,12 @@ def validate_plan(plan_path: Path) -> dict:
     assert all(0 <= level < len(architecture["conv_kernels"]) for level in architecture["decoder_levels"])
     assert len(plan["patch_size"]) == 3
     assert len(plan["target_spacing"]) == 3
-    assert set(plan["normalization_schemes"].values()) == {"nonCT"}
+    expected_normalization = {"raw"} if task_name == "Task2202_PICAI_csPCa" else {"nonCT"}
+    assert set(plan["normalization_schemes"].values()) == expected_normalization
+    if task_name == "Task2202_PICAI_csPCa":
+        assert int(plan.get("order_data", -1)) == 1, "Task2202 requires linear image resampling"
+    elif "order_data" in plan:
+        assert int(plan["order_data"]) == 3, "Task2201's cubic preprocessing plan must remain unchanged"
     assert len(plan["use_mask_for_norm"]) == 3
     return plan
 
@@ -213,7 +218,7 @@ def _json_value(value):
 
 def write_manifest(task_dir: Path, plan_path: Path, cases: List[str]) -> Path:
     """Capture the resolved preprocessing and five-level plan beside the task."""
-    plan = validate_plan(plan_path)
+    plan = validate_plan(plan_path, task_name=task_dir.name)
     architecture = plan["architecture"]
     manifest = {
         "task": task_dir.name,
@@ -227,12 +232,16 @@ def write_manifest(task_dir: Path, plan_path: Path, cases: List[str]) -> Path:
         "target_spacing": _json_value(plan["target_spacing"]),
         "patch_size": _json_value(plan["patch_size"]),
         "normalization_schemes": _json_value(plan["normalization_schemes"]),
+        "order_data": int(plan.get("order_data", 3)),
         "use_mask_for_norm": _json_value(plan["use_mask_for_norm"]),
         "architecture": {
             key: _json_value(architecture[key])
             for key in ("in_channels", "classifier_classes", "conv_kernels", "strides")
         },
     }
+    if task_dir.name == "Task2202_PICAI_csPCa":
+        manifest["preprocessing_config_sha256"] = _sha256(task_dir / "preprocessing_config.json")
+        manifest["fov_coverage_sha256"] = _sha256(task_dir / "fov_coverage.json")
     output_path = task_dir / "dataset_manifest.json"
     output_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return output_path
