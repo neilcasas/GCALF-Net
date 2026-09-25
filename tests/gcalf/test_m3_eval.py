@@ -9,6 +9,7 @@ import pytest
 picai_eval = pytest.importorskip("picai_eval")
 sitk = pytest.importorskip("SimpleITK")
 
+from gcalf_eval.grade_metrics import lesion_instances
 from gcalf_eval.run_eval import _filter_prediction_by_score, boxes_to_detection_map, run_evaluation
 
 
@@ -213,6 +214,26 @@ def test_run_evaluation_with_grade_predictions_populates_grade_metrics_end_to_en
     assert row["grade_score_threshold"] == pytest.approx(0.5)
     assert row["grade_false_positives_per_case"] == pytest.approx(0.0)
     assert (output / "grade_metrics.json").is_file()
+    assert (output / "harmonized_froc.json").is_file()
+    assert (output / "harmonized_froc_events.json").is_file()
+    with (output / "harmonized_froc.json").open() as file:
+        harmonized = json.load(file)
+    with (output / "harmonized_froc_events.json").open() as file:
+        harmonized_events = json.load(file)
+    expected_support = {f"GGG{grade}": 0 for grade in (2, 3, 4, 5)}
+    _, grades, supervised = lesion_instances(labels / "positive.nii.gz")
+    for grade in (2, 3, 4, 5):
+        expected_support[f"GGG{grade}"] = int(np.sum(supervised & (grades == grade)))
+    assert harmonized["gt_lesions_per_grade"] == expected_support
+    assert {
+        "num_patients", "num_cases", "gt_lesions_per_grade", "num_candidates",
+        "iou_threshold", "operating_point_rule", "description", "curves", "records",
+    }.issubset(harmonized)
+    assert harmonized["num_patients"] == 2
+    assert harmonized["num_cases"] == 2
+    assert harmonized_events["patients"] == ["benign", "positive"]
+    assert {"score", "grade", "fp", "patient"} <= set(harmonized_events["generic_events"][0])
+    assert {"score", "tp", "fp", "patient"} <= set(harmonized_events["grade_events"]["GGG3"][0])
     with (output / "metrics.csv").open(newline="") as file:
         csv_row = next(csv.DictReader(file))
     assert math.isfinite(float(csv_row["grade_false_positives_per_case"]))

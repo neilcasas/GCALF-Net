@@ -15,6 +15,12 @@ from scipy import ndimage
 
 from gcalf_eval.grade_metrics import lesion_instances, match_grade_predictions, summarize_grade_matches
 from gcalf_eval.grade_pilot import patient_id
+from gcalf_eval.harmonized_froc import (
+    GRADE_VALUES,
+    harmonized_froc_events,
+    make_events_payload,
+    summarize_harmonized_froc,
+)
 from gcalf_eval.seg_metrics import match_and_score_segmentation, summarize_segmentation_matches
 from nndet.io.load import load_pickle
 from nndet.io.paths import get_task, get_training_dir
@@ -202,6 +208,10 @@ def run_evaluation(
     ground_truth_masks = []
     grade_true, grade_predicted, grade_probabilities, grade_patients = [], [], [], []
     grade_misses = grade_false_positives = grade_matched_ungraded = 0
+    harmonized_generic_events = []
+    harmonized_grade_events = {grade: [] for grade in GRADE_VALUES}
+    harmonized_support = {grade: 0 for grade in GRADE_VALUES}
+    harmonized_patients = set()
     has_grade_predictions = True
     # Segmentation predictions are a separate file per case (`{case_id}_seg.pkl`,
     # written only when inference ran with `inference_kwargs.do_seg=true` --
@@ -240,6 +250,24 @@ def run_evaluation(
             grade_misses += misses
             grade_false_positives += false_positives
             grade_matched_ungraded += matched_ungraded
+            harmonized_patients.add(patient_id(case_id))
+            for grade in GRADE_VALUES:
+                harmonized_support[grade] += int(np.sum(gt_supervised & (gt_grades == grade)))
+            case_generic_events, case_grade_events = harmonized_froc_events(
+                prediction["pred_boxes"],
+                prediction["pred_scores"],
+                prediction["pred_grade_probs"],
+                gt_boxes,
+                gt_grades,
+                gt_supervised,
+            )
+            harmonized_generic_events.extend(
+                {**event, "patient": patient_id(case_id)} for event in case_generic_events
+            )
+            for grade in GRADE_VALUES:
+                harmonized_grade_events[grade].extend(
+                    {**event, "patient": patient_id(case_id)} for event in case_grade_events[grade]
+                )
 
         if has_seg_predictions:
             seg_path = prediction_dir / f"{case_id}_seg.pkl"
@@ -313,6 +341,27 @@ def run_evaluation(
                 "probabilities": grade_probabilities,
                 "patients": grade_patients,
             }, file)
+        harmonized_summary = summarize_harmonized_froc(
+            harmonized_generic_events,
+            harmonized_grade_events,
+            harmonized_support,
+            num_patients=len(harmonized_patients),
+            num_cases=len(expected_case_ids),
+        )
+        with (output_dir / "harmonized_froc.json").open("w") as file:
+            json.dump(harmonized_summary, file, indent=2)
+        with (output_dir / "harmonized_froc_events.json").open("w") as file:
+            json.dump(
+                make_events_payload(
+                    harmonized_generic_events,
+                    harmonized_grade_events,
+                    harmonized_support,
+                    harmonized_patients,
+                    num_cases=len(expected_case_ids),
+                ),
+                file,
+                indent=2,
+            )
     if has_seg_predictions:
         with (output_dir / "seg_metrics.json").open("w") as file:
             json.dump({key: value for key, value in row.items() if key.startswith("seg_")}, file, indent=2)
