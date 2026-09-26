@@ -100,7 +100,7 @@ if [[ -n "$m5_record" ]]; then
     [[ -f "$m5_record" ]] || die "--m5-record not found: $m5_record (pass --m5-record '' to skip)"
 fi
 
-task=Task2201_PICAI_csPCa
+task=Task2202_PICAI_csPCa
 fold0_gate_record="$det_models/$task/RetinaUNetV001_D3V001_3d_full/fold0/fold0_detection_gate.json"
 gate_script="$repo_dir/scripts/check_fold0_detection_gate.py"
 if [[ "$fold_start" -gt 0 ]]; then
@@ -125,8 +125,8 @@ for fold in $(seq "$fold_start" "$fold_end"); do
     if [[ "$dry_run" == true ]]; then
         for gpu in "${!arms[@]}"; do
             arm=${arms[$gpu]}
-            train_config="gcalf_${arm}"
-            [[ "$arm" == full ]] && train_config=gcalf_final
+            train_config="gcalf_task2202_${arm}_final"
+            [[ "$arm" == full ]] && train_config=gcalf_task2202
             printf 'CUDA_VISIBLE_DEVICES=%s det_num_threads=%q ' "$gpu" "$det_num_threads"
             printf '%q ' "$python_bin" scripts/train.py "$task" --sweep -o \
                 "train=$train_config" "exp.fold=${fold}" "exp.seed=${seed}" "exp.tag=_${arm}" \
@@ -142,8 +142,8 @@ for fold in $(seq "$fold_start" "$fold_end"); do
 
     for gpu in "${!arms[@]}"; do
         arm=${arms[$gpu]}
-        train_config="gcalf_${arm}"
-        [[ "$arm" == full ]] && train_config=gcalf_final
+        train_config="gcalf_task2202_${arm}_final"
+        [[ "$arm" == full ]] && train_config=gcalf_task2202
         log_dir="$det_models/$task/RetinaUNetV001_D3V001_3d_${arm}"
         mkdir -p "$log_dir"
         CUDA_VISIBLE_DEVICES="$gpu" "$python_bin" scripts/train.py "$task" --sweep -o \

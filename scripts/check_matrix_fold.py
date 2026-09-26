@@ -52,15 +52,11 @@ SHUFFLED_DATALOADER_KWARGS = {
     "lesion_transfer_cfg.shuffle_labels": True,
 }
 
-# The three non-final detection arms remain the already-locked detection
-# controls. The full arm is the single declared CORAL + transfer intervention.
-CONTROL_TRAINER_CFG = {
-    **LOCKED_TRAINER_CFG,
-    "grade_class_weight_source": "lesion",
-}
-CONTROL_MODEL_CFG = {"head_grade_kwargs.grade_loss_type": "ce"}
-CONTROL_DATALOADER_KWARGS = {"grade_balanced_sampling": False}
-CONTROL_DATALOADER = "DataLoader{}DOffset"
+# Deviation from ADR 0005/the original Task2201 matrix (docs/adr/0006-coral-
+# transfer-all-arms.md): CORAL + lesion transfer is now the locked grade
+# configuration for all four arms (baseline, lff, caf, full), not just "full".
+# The "shuffled" fold-0 labels-shuffled control keeps its own dataloader
+# override above; there is no other per-arm control profile.
 
 # Known-cosmetic: batchgenerators worker-teardown race at process exit,
 # occurring only after all real work (checkpoints, metrics) is saved.
@@ -113,14 +109,10 @@ def check_resolved_config(train_dir, problems, arm=None):
         return
     resolved = yaml.safe_load(config_path.read_text())
     trainer_cfg = resolved.get("trainer_cfg", {})
-    is_locked_transfer = arm in (None, "full", "shuffled")
-    locked_trainer = LOCKED_TRAINER_CFG if is_locked_transfer else CONTROL_TRAINER_CFG
-    locked_model = LOCKED_MODEL_CFG if is_locked_transfer else CONTROL_MODEL_CFG
-    if arm == "shuffled":
-        locked_dataloader = SHUFFLED_DATALOADER_KWARGS
-    else:
-        locked_dataloader = LOCKED_DATALOADER_KWARGS if is_locked_transfer else CONTROL_DATALOADER_KWARGS
-    expected_dataloader = LOCKED_DATALOADER if is_locked_transfer else CONTROL_DATALOADER
+    locked_trainer = LOCKED_TRAINER_CFG
+    locked_model = LOCKED_MODEL_CFG
+    locked_dataloader = SHUFFLED_DATALOADER_KWARGS if arm == "shuffled" else LOCKED_DATALOADER_KWARGS
+    expected_dataloader = LOCKED_DATALOADER
     for key, expected in locked_trainer.items():
         actual = trainer_cfg.get(key)
         if actual != expected:

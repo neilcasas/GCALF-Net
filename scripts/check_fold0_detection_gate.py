@@ -174,8 +174,8 @@ def run_gate(
     )
     if not passed:
         print(
-            "Fold-0 detection safety gate failed. ADR 0005 fallback: stop, relaunch the "
-            "locked baseline (ce, transfer off), and report grade as the preregistered null.",
+            "Fold-0 detection safety gate failed. ADR 0005/0006 fallback: stop and report "
+            "grade as the preregistered null; do not launch folds 1-4.",
             file=sys.stderr,
         )
     return passed

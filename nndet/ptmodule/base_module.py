@@ -62,8 +62,8 @@ class LightningBaseModule(pl.LightningModule):
             1, plan["architecture"]["in_channels"], *plan["patch_size"],
             )
 
-        self.epoch_start_tic = 0
-        self.epoch_end_toc = 0
+        self.epoch_start_tic = None
+        self.epoch_end_toc = None
         self.training_step_outputs = []
         self.validation_step_outputs = []
 
@@ -85,9 +85,14 @@ class LightningBaseModule(pl.LightningModule):
         """
         Print time of epoch
         (needed for cluster where progress bar is deactivated)
+
+        Lightning's sanity-check validation pass calls this before
+        ``on_train_epoch_start`` has ever run, i.e. before there is an epoch to
+        time; skip logging then instead of printing time() - 0.
         """
         self.epoch_end_toc = time()
-        logger.info(f"This epoch took {int(self.epoch_end_toc - self.epoch_start_tic)} s")
+        if self.epoch_start_tic is not None:
+            logger.info(f"This epoch took {int(self.epoch_end_toc - self.epoch_start_tic)} s")
         return super().on_validation_epoch_end()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
